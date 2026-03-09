@@ -1,6 +1,6 @@
 // ============================================
 // CHATHUB - REAL-TIME CHAT APPLICATION
-// Complete Client-Side Application with Polling Support
+// Complete Client-Side Application with Polling & Offline Support
 // ============================================
 
 // ============================================
@@ -10,13 +10,130 @@ class PollingService {
   constructor(app) {
     this.app = app;
     this.pollInterval = null;
-    this.pollIntervalMs = 1000; // Poll every 5 seconds
+    this.pollIntervalMs = 2000; // Poll every 2 seconds
     this.isPolling = false;
     this.lastRoomMessageId = null;
     this.lastDMCheck = 0;
     this.enabled = false;
     this.consecutiveErrors = 0;
     this.maxConsecutiveErrors = 5;
+    
+    // Offline support
+    this.offlineQueue = [];
+    this.isOnline = navigator.onLine;
+    this.initOfflineSupport();
+  }
+
+  // Initialize offline support
+  initOfflineSupport() {
+    // Load queued messages from localStorage
+    const stored = localStorage.getItem('offlineMessageQueue');
+    if (stored) {
+      try {
+        this.offlineQueue = JSON.parse(stored);
+        console.log(`[Offline] Loaded ${this.offlineQueue.length} queued messages`);
+      } catch (e) {
+        console.error('[Offline] Failed to load queue:', e);
+        this.offlineQueue = [];
+      }
+    }
+
+    // Listen for online/offline events
+    window.addEventListener('online', () => {
+      console.log('[Offline] Connection restored - syncing queued messages');
+      this.isOnline = true;
+      this.app.showToast('Back online - syncing messages...', 'success');
+      this.syncOfflineMessages();
+    });
+
+    window.addEventListener('offline', () => {
+      console.log('[Offline] Connection lost - entering offline mode');
+      this.isOnline = false;
+      this.app.updateConnectionStatus('offline');
+      this.app.showToast('You are offline - messages will be sent when reconnected', 'warning');
+    });
+  }
+
+  // Queue message for offline sending
+  queueOfflineMessage(message) {
+    const queuedMessage = {
+      ...message,
+      id: 'temp-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9),
+      queuedAt: Date.now(),
+      status: 'queued'
+    };
+    
+    this.offlineQueue.push(queuedMessage);
+    this.saveOfflineQueue();
+    
+    console.log('[Offline] Message queued:', queuedMessage.id);
+    return queuedMessage;
+  }
+
+  // Save queue to localStorage
+  saveOfflineQueue() {
+    try {
+      localStorage.setItem('offlineMessageQueue', JSON.stringify(this.offlineQueue));
+    } catch (e) {
+      console.error('[Offline] Failed to save queue:', e);
+    }
+  }
+
+  // Sync offline messages when back online
+  async syncOfflineMessages() {
+    if (this.offlineQueue.length === 0) {
+      console.log('[Offline] No queued messages to sync');
+      return;
+    }
+    
+    console.log(`[Offline] Syncing ${this.offlineQueue.length} queued messages...`);
+    
+    const messages = [...this.offlineQueue];
+    this.offlineQueue = [];
+    this.saveOfflineQueue();
+    
+    let successCount = 0;
+    let failCount = 0;
+    
+    for (const message of messages) {
+      try {
+        if (message.isDM) {
+          await this.app.syncDMMessageToServer(message);
+        } else {
+          await this.app.syncMessageToServer(message);
+        }
+        successCount++;
+        console.log('[Offline] Synced message:', message.id);
+        
+        // Remove pending indicator from UI
+        this.app.markMessageAsSent(message.id);
+      } catch (error) {
+        console.error('[Offline] Failed to sync message:', error);
+        failCount++;
+        // Re-queue failed messages
+        this.offlineQueue.push(message);
+      }
+    }
+    
+    this.saveOfflineQueue();
+    
+    if (successCount > 0) {
+      this.app.showToast(`${successCount} message(s) sent successfully!`, 'success');
+    }
+    if (failCount > 0) {
+      this.app.showToast(`${failCount} message(s) failed - will retry`, 'warning');
+    }
+  }
+
+  // Get queued message count
+  getQueuedCount() {
+    return this.offlineQueue.length;
+  }
+
+  // Clear all queued messages (for logout)
+  clearQueue() {
+    this.offlineQueue = [];
+    this.saveOfflineQueue();
   }
 
   start() {
@@ -51,6 +168,12 @@ class PollingService {
 
     // Don't poll if already polling or no token
     if (this.isPolling || !this.app.token) return;
+
+    // Don't poll if offline
+    if (!navigator.onLine) {
+      console.log('[Polling] Skipping poll - offline');
+      return;
+    }
 
     // Don't poll if too many consecutive errors
     if (this.consecutiveErrors >= this.maxConsecutiveErrors) {
@@ -233,7 +356,7 @@ class ChatApp {
   }
 
   init() {
-    console.log('🚀 Initializing ChatHub with Polling Support...');
+    console.log('🚀 Initializing ChatHub with Polling & Offline Support...');
     this.cacheElements();
     this.attachEventListeners();
     this.initTheme();
@@ -241,6 +364,15 @@ class ChatApp {
     this.initSidebar();
     this.loadSettings();
     this.checkExistingSession();
+    this.showOfflineQueueStatus();
+  }
+
+  // Show offline queue status on init
+  showOfflineQueueStatus() {
+    const queuedCount = this.pollingService.getQueuedCount();
+    if (queuedCount > 0) {
+      this.showToast(`${queuedCount} message(s) waiting to be sent`, 'info');
+    }
   }
 
   // ============================================
@@ -820,6 +952,8 @@ class ChatApp {
         }
         // Also do a poll to catch up
         this.pollingService.poll();
+        // Try to sync any offline messages
+        this.pollingService.syncOfflineMessages();
       }
     });
 
@@ -841,7 +975,7 @@ class ChatApp {
     window.addEventListener('offline', () => {
       console.log('📴 Browser is offline');
       this.updateConnectionStatus('offline');
-      this.showToast('You are offline', 'warning');
+      this.showToast('You are offline - messages will queue', 'warning');
     });
   }
 
@@ -858,7 +992,7 @@ class ChatApp {
       online: 'Connected (WebSocket)',
       polling: 'Connected (Polling)',
       connecting: 'Connecting...',
-      offline: 'Offline'
+      offline: 'Offline (Messages will queue)'
     };
     
     indicator.title = titles[status] || 'Unknown';
@@ -875,6 +1009,27 @@ class ChatApp {
       return;
     }
 
+    // If offline, try to restore session from localStorage
+    if (!navigator.onLine) {
+      const cachedUser = localStorage.getItem('cachedUser');
+      if (cachedUser) {
+        try {
+          this.user = JSON.parse(cachedUser);
+          this.token = token;
+          this.showScreen('chat');
+          this.updateUI();
+          this.updateConnectionStatus('offline');
+          this.showToast('Offline mode - limited functionality', 'warning');
+          return;
+        } catch (e) {
+          console.error('Failed to parse cached user:', e);
+        }
+      }
+      this.showScreen('auth');
+      this.showToast('Please connect to internet to login', 'error');
+      return;
+    }
+
     try {
       const response = await this.apiRequest('/api/auth/verify', {
         method: 'GET',
@@ -884,6 +1039,8 @@ class ChatApp {
       if (response.success) {
         this.token = token;
         this.user = response.user;
+        // Cache user for offline access
+        localStorage.setItem('cachedUser', JSON.stringify(response.user));
         this.connectWebSocket();
       } else {
         this.clearSession();
@@ -891,6 +1048,21 @@ class ChatApp {
       }
     } catch (error) {
       console.error('Session verification failed:', error);
+      // Try offline mode with cached data
+      const cachedUser = localStorage.getItem('cachedUser');
+      if (cachedUser) {
+        try {
+          this.user = JSON.parse(cachedUser);
+          this.token = token;
+          this.showScreen('chat');
+          this.updateUI();
+          this.updateConnectionStatus('offline');
+          this.showToast('Offline mode - limited functionality', 'warning');
+          return;
+        } catch (e) {
+          console.error('Failed to parse cached user:', e);
+        }
+      }
       this.clearSession();
       this.showScreen('auth');
     }
@@ -903,6 +1075,11 @@ class ChatApp {
 
     if (!username || !password) {
       this.showAuthError('login', 'Please fill in all fields');
+      return;
+    }
+
+    if (!navigator.onLine) {
+      this.showAuthError('login', 'You are offline. Please connect to internet to login.');
       return;
     }
 
@@ -923,6 +1100,9 @@ class ChatApp {
         } else {
           sessionStorage.setItem('chatToken', response.token);
         }
+
+        // Cache user for offline access
+        localStorage.setItem('cachedUser', JSON.stringify(response.user));
 
         this.connectWebSocket();
       } else {
@@ -974,6 +1154,11 @@ class ChatApp {
       return;
     }
 
+    if (!navigator.onLine) {
+      this.showAuthError('register', 'You are offline. Please connect to internet to register.');
+      return;
+    }
+
     this.setButtonLoading(this.authElements.registerBtn, true, 'Creating account...');
 
     try {
@@ -986,6 +1171,8 @@ class ChatApp {
         this.token = response.token;
         this.user = response.user;
         sessionStorage.setItem('chatToken', response.token);
+        // Cache user for offline access
+        localStorage.setItem('cachedUser', JSON.stringify(response.user));
         this.connectWebSocket();
         this.showToast('Account created successfully!', 'success');
       } else {
@@ -1042,16 +1229,18 @@ class ChatApp {
 
   async logout() {
     try {
-      await this.apiRequest('/api/auth/logout', {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${this.token}` }
-      });
+      if (navigator.onLine) {
+        await this.apiRequest('/api/auth/logout', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${this.token}` }
+        });
+      }
     } catch (error) {
       console.error('Logout error:', error);
     }
 
     this.pollingService.stop();
-    this.pollingService.reset();
+    this.pollingService.clearQueue();
     this.clearSession();
     this.closeAllModals();
     this.showScreen('auth');
@@ -1069,6 +1258,7 @@ class ChatApp {
     }
     localStorage.removeItem('chatToken');
     sessionStorage.removeItem('chatToken');
+    localStorage.removeItem('cachedUser');
     this.user = null;
     this.token = null;
     this.messages.clear();
@@ -1082,6 +1272,14 @@ class ChatApp {
   // ============================================
   connectWebSocket() {
     if (this.isConnecting || (this.ws && this.ws.readyState === WebSocket.OPEN)) {
+      return;
+    }
+
+    if (!navigator.onLine) {
+      console.log('📴 Offline - cannot connect WebSocket');
+      this.updateConnectionStatus('offline');
+      this.showScreen('chat');
+      this.updateUI();
       return;
     }
 
@@ -1112,6 +1310,9 @@ class ChatApp {
       
       // Stop polling when WS is connected
       this.pollingService.stop();
+      
+      // Sync any offline messages
+      this.pollingService.syncOfflineMessages();
     };
 
     this.ws.onmessage = (event) => {
@@ -1195,6 +1396,9 @@ class ChatApp {
         this.user = data.user;
         this.rooms = data.rooms || [];
         this.onlineUsers = new Map((data.onlineUsers || []).map(u => [u.id, u]));
+        // Cache user and rooms for offline access
+        localStorage.setItem('cachedUser', JSON.stringify(data.user));
+        localStorage.setItem('cachedRooms', JSON.stringify(data.rooms));
         this.showScreen('chat');
         this.updateUI();
         this.joinRoom(this.currentRoom);
@@ -1288,8 +1492,11 @@ class ChatApp {
         type: 'join_room',
         roomId
       });
-    } else {
+    } else if (navigator.onLine) {
       this.joinRoomViaHTTP(roomId);
+    } else {
+      // Offline - load cached messages
+      this.loadCachedRoomMessages(roomId);
     }
   }
 
@@ -1307,10 +1514,36 @@ class ChatApp {
           lastMessageId: response.lastMessageId,
           pinnedMessages: []
         });
+        // Cache messages for offline access
+        localStorage.setItem(`cachedMessages_${roomId}`, JSON.stringify(response.messages));
       }
     } catch (error) {
       console.error('Join room via HTTP failed:', error);
-      this.showToast('Failed to load room', 'error');
+      // Try loading cached messages
+      this.loadCachedRoomMessages(roomId);
+    }
+  }
+
+  loadCachedRoomMessages(roomId) {
+    const cached = localStorage.getItem(`cachedMessages_${roomId}`);
+    if (cached) {
+      try {
+        const messages = JSON.parse(cached);
+        this.handleRoomJoined({
+          roomId,
+          messages,
+          lastMessageId: messages.length > 0 ? messages[messages.length - 1].id : null,
+          pinnedMessages: []
+        });
+        this.showToast('Showing cached messages', 'info');
+      } catch (e) {
+        console.error('Failed to load cached messages:', e);
+        this.showToast('No cached messages available', 'warning');
+      }
+    } else {
+      this.currentRoom = roomId;
+      this.updateRoomHeader();
+      this.chatElements.welcomeMessage?.classList.remove('hidden');
     }
   }
 
@@ -1333,6 +1566,8 @@ class ChatApp {
     if (data.messages && data.messages.length > 0) {
       this.chatElements.welcomeMessage?.classList.add('hidden');
       data.messages.forEach(msg => this.renderMessage(msg, false));
+      // Cache messages for offline access
+      localStorage.setItem(`cachedMessages_${this.currentRoom}`, JSON.stringify(data.messages));
     } else {
       this.chatElements.welcomeMessage?.classList.remove('hidden');
       if (this.chatElements.welcomeRoomName) {
@@ -1351,6 +1586,18 @@ class ChatApp {
   updateRoomsList() {
     const container = this.sidebarElements.roomsList;
     if (!container) return;
+
+    // If offline and no rooms, try to load from cache
+    if (this.rooms.length === 0) {
+      const cachedRooms = localStorage.getItem('cachedRooms');
+      if (cachedRooms) {
+        try {
+          this.rooms = JSON.parse(cachedRooms);
+        } catch (e) {
+          console.error('Failed to load cached rooms:', e);
+        }
+      }
+    }
 
     container.innerHTML = '';
 
@@ -1400,6 +1647,11 @@ class ChatApp {
       return;
     }
 
+    if (!navigator.onLine) {
+      this.showToast('Cannot create room while offline', 'error');
+      return;
+    }
+
     try {
       const response = await this.apiRequest('/api/rooms', {
         method: 'POST',
@@ -1411,6 +1663,7 @@ class ChatApp {
         this.closeAllModals();
         this.clearCreateRoomForm();
         this.rooms.push(response.room);
+        localStorage.setItem('cachedRooms', JSON.stringify(this.rooms));
         this.joinRoom(response.room.id);
         this.showToast('Channel created successfully!', 'success');
       } else {
@@ -1433,13 +1686,14 @@ class ChatApp {
     // Check if room already exists
     if (!this.rooms.find(r => r.id === room.id)) {
       this.rooms.push(room);
+      localStorage.setItem('cachedRooms', JSON.stringify(this.rooms));
       this.updateRoomsList();
       this.showToast(`New channel: ${room.name}`, 'info');
     }
   }
 
   // ============================================
-  // MESSAGING (WITH HTTP FALLBACK)
+  // MESSAGING (WITH OFFLINE SUPPORT)
   // ============================================
   async sendMessage() {
     const text = this.chatElements.messageInput?.value.trim();
@@ -1452,46 +1706,129 @@ class ChatApp {
       this.autoResizeTextarea(this.chatElements.messageInput);
     }
 
-    const replyTo = this.replyingTo;
-    const attachment = this.attachment;
+    const messageData = {
+      text: text || '',
+      attachment: this.attachment,
+      replyTo: this.replyingTo
+    };
     
     this.clearReply();
     this.clearAttachment();
     this.sendTypingStatus(false);
+
+    // Check if online
+    if (!navigator.onLine) {
+      // Queue for later
+      const queued = this.pollingService.queueOfflineMessage({
+        type: 'message',
+        roomId: this.currentRoom,
+        text: messageData.text,
+        attachment: messageData.attachment,
+        replyTo: messageData.replyTo,
+        isDM: false
+      });
+      
+      // Show message immediately with "pending" indicator
+      this.showPendingMessage(queued);
+      this.showToast('Message queued - will send when online', 'info');
+      return;
+    }
 
     // Try WebSocket first
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       this.wsSend({
         type: 'message',
         roomId: this.currentRoom,
-        text: text || '',
-        attachment: attachment,
-        replyTo: replyTo
+        text: messageData.text,
+        attachment: messageData.attachment,
+        replyTo: messageData.replyTo
       });
     } else {
       // Fall back to HTTP
-      try {
-        const response = await this.apiRequest(`/api/messages/${this.currentRoom}`, {
-          method: 'POST',
-          headers: { 'Authorization': `Bearer ${this.token}` },
-          body: JSON.stringify({
-            text: text || '',
-            attachment: attachment,
-            replyTo: replyTo
-          })
-        });
+      await this.sendMessageViaHTTP(messageData);
+    }
+  }
 
-        if (response.success) {
-          this.handleNewMessage(response.message);
-          // Update polling last message ID
-          this.pollingService.lastRoomMessageId = response.message.id;
-        } else {
-          this.showToast(response.error || 'Failed to send message', 'error');
-        }
-      } catch (error) {
-        console.error('Send message error:', error);
-        this.showToast('Failed to send message', 'error');
+  async sendMessageViaHTTP(messageData) {
+    try {
+      const response = await this.apiRequest(`/api/messages/${this.currentRoom}`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${this.token}` },
+        body: JSON.stringify({
+          text: messageData.text,
+          attachment: messageData.attachment,
+          replyTo: messageData.replyTo
+        })
+      });
+
+      if (response.success) {
+        this.handleNewMessage(response.message);
+        this.pollingService.lastRoomMessageId = response.message.id;
+      } else {
+        throw new Error(response.error || 'Failed to send');
       }
+    } catch (error) {
+      console.error('Send message error:', error);
+      
+      // Queue message if send failed
+      const queued = this.pollingService.queueOfflineMessage({
+        type: 'message',
+        roomId: this.currentRoom,
+        text: messageData.text,
+        attachment: messageData.attachment,
+        replyTo: messageData.replyTo,
+        isDM: false
+      });
+      
+      this.showPendingMessage(queued);
+      this.showToast('Message queued - will retry when connected', 'warning');
+    }
+  }
+
+  // Sync message to server (called by PollingService)
+  async syncMessageToServer(message) {
+    const response = await this.apiRequest(`/api/messages/${message.roomId}`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${this.token}` },
+      body: JSON.stringify({
+        text: message.text,
+        attachment: message.attachment,
+        replyTo: message.replyTo
+      })
+    });
+
+    if (!response.success) {
+      throw new Error(response.error || 'Failed to send message');
+    }
+
+    return response.message;
+  }
+
+  // Show pending message in UI
+  showPendingMessage(message) {
+    const pendingMessage = {
+      id: message.id,
+      tempId: message.id,
+      userId: this.user?.id,
+      username: this.user?.username,
+      displayName: this.user?.displayName,
+      avatar: this.user?.avatar,
+      text: message.text,
+      attachment: message.attachment,
+      replyTo: message.replyTo,
+      roomId: message.roomId,
+      createdAt: new Date(message.queuedAt).toISOString(),
+      pending: true
+    };
+    
+    this.handleNewMessage(pendingMessage);
+  }
+
+  // Mark message as sent (remove pending indicator)
+  markMessageAsSent(tempId) {
+    const messageEl = document.querySelector(`[data-message-id="${tempId}"]`);
+    if (messageEl) {
+      messageEl.classList.remove('pending');
     }
   }
 
@@ -1509,10 +1846,14 @@ class ChatApp {
     if (!roomMessages.find(m => m.id === message.id)) {
       roomMessages.push(message);
       this.messages.set(this.currentRoom, roomMessages);
+      // Update cache
+      localStorage.setItem(`cachedMessages_${this.currentRoom}`, JSON.stringify(roomMessages.slice(-100)));
     }
 
-    // Update polling last message ID
-    this.pollingService.lastRoomMessageId = message.id;
+    // Update polling last message ID (only for non-pending messages)
+    if (!message.pending) {
+      this.pollingService.lastRoomMessageId = message.id;
+    }
 
     // Hide welcome message
     this.chatElements.welcomeMessage?.classList.add('hidden');
@@ -1521,7 +1862,7 @@ class ChatApp {
     this.renderMessage(message, true);
 
     // Play notification if not own message
-    if (message.userId !== this.user?.id) {
+    if (message.userId !== this.user?.id && !message.pending) {
       this.playNotificationSound();
       this.showDesktopNotification(message);
     }
@@ -1545,7 +1886,7 @@ class ChatApp {
     }
 
     const messageEl = document.createElement('div');
-    messageEl.className = 'message';
+    messageEl.className = `message ${message.pending ? 'pending' : ''}`;
     messageEl.dataset.messageId = message.id;
     messageEl.dataset.userId = message.userId;
 
@@ -1608,6 +1949,13 @@ class ChatApp {
       </div>
     ` : '';
 
+    // Pending indicator
+    const pendingHtml = message.pending ? `
+      <div class="pending-indicator">
+        <i class="fas fa-clock"></i> Sending...
+      </div>
+    ` : '';
+
     messageEl.innerHTML = `
       <img class="message-avatar" src="${avatar}" alt="" 
            onclick="app.openUserProfile('${message.userId}')" loading="lazy">
@@ -1620,31 +1968,34 @@ class ChatApp {
         ${replyHtml}
         <div class="message-text">${this.formatMessageText(message.text)}</div>
         ${attachmentHtml}
+        ${pendingHtml}
         ${threadHtml}
         <div class="message-reactions">${reactionsHtml}</div>
       </div>
-      <div class="message-actions">
-        <button class="btn-icon-tiny" onclick="app.addReaction('${message.id}')" title="Add Reaction">
-          <i class="fas fa-smile"></i>
-        </button>
-        <button class="btn-icon-tiny" onclick="app.replyToMessage('${message.id}')" title="Reply">
-          <i class="fas fa-reply"></i>
-        </button>
-        <button class="btn-icon-tiny" onclick="app.openThread('${message.id}')" title="Start Thread">
-          <i class="fas fa-comments"></i>
-        </button>
-        ${message.userId === this.user?.id ? `
-          <button class="btn-icon-tiny" onclick="app.editMessage('${message.id}')" title="Edit">
-            <i class="fas fa-edit"></i>
+      ${!message.pending ? `
+        <div class="message-actions">
+          <button class="btn-icon-tiny" onclick="app.addReaction('${message.id}')" title="Add Reaction">
+            <i class="fas fa-smile"></i>
           </button>
-          <button class="btn-icon-tiny" onclick="app.deleteMessage('${message.id}')" title="Delete">
-            <i class="fas fa-trash"></i>
+          <button class="btn-icon-tiny" onclick="app.replyToMessage('${message.id}')" title="Reply">
+            <i class="fas fa-reply"></i>
           </button>
-        ` : ''}
-        <button class="btn-icon-tiny" onclick="app.pinMessage('${message.id}')" title="Pin">
-          <i class="fas fa-thumbtack"></i>
-        </button>
-      </div>
+          <button class="btn-icon-tiny" onclick="app.openThread('${message.id}')" title="Start Thread">
+            <i class="fas fa-comments"></i>
+          </button>
+          ${message.userId === this.user?.id ? `
+            <button class="btn-icon-tiny" onclick="app.editMessage('${message.id}')" title="Edit">
+              <i class="fas fa-edit"></i>
+            </button>
+            <button class="btn-icon-tiny" onclick="app.deleteMessage('${message.id}')" title="Delete">
+              <i class="fas fa-trash"></i>
+            </button>
+          ` : ''}
+          <button class="btn-icon-tiny" onclick="app.pinMessage('${message.id}')" title="Pin">
+            <i class="fas fa-thumbtack"></i>
+          </button>
+        </div>
+      ` : ''}
     `;
 
     container.appendChild(messageEl);
@@ -1744,6 +2095,11 @@ class ChatApp {
     const message = this.findMessage(messageId);
     if (!message || message.userId !== this.user?.id) return;
 
+    if (!navigator.onLine) {
+      this.showToast('Cannot edit message while offline', 'error');
+      return;
+    }
+
     const newText = prompt('Edit message:', message.text);
     if (newText !== null && newText.trim() !== message.text) {
       this.wsSend({
@@ -1757,6 +2113,11 @@ class ChatApp {
   deleteMessage(messageId) {
     const message = this.findMessage(messageId);
     if (!message || message.userId !== this.user?.id) return;
+
+    if (!navigator.onLine) {
+      this.showToast('Cannot delete message while offline', 'error');
+      return;
+    }
 
     if (confirm('Delete this message?')) {
       this.wsSend({
@@ -1785,6 +2146,8 @@ class ChatApp {
     if (msg) {
       msg.text = data.text;
       msg.edited = true;
+      // Update cache
+      localStorage.setItem(`cachedMessages_${this.currentRoom}`, JSON.stringify(roomMessages.slice(-100)));
     }
   }
 
@@ -1803,11 +2166,18 @@ class ChatApp {
     const index = roomMessages.findIndex(m => m.id === data.messageId);
     if (index > -1) {
       roomMessages.splice(index, 1);
+      // Update cache
+      localStorage.setItem(`cachedMessages_${this.currentRoom}`, JSON.stringify(roomMessages.slice(-100)));
     }
   }
 
   // Reactions
   addReaction(messageId) {
+    if (!navigator.onLine) {
+      this.showToast('Cannot add reaction while offline', 'warning');
+      return;
+    }
+
     const quickReactions = ['👍', '❤️', '😂', '😮', '😢', '🎉', '🔥', '👀'];
 
     // Remove existing picker
@@ -1827,6 +2197,11 @@ class ChatApp {
   }
 
   toggleReaction(messageId, emoji) {
+    if (!navigator.onLine) {
+      this.showToast('Cannot react while offline', 'warning');
+      return;
+    }
+
     this.wsSend({
       type: 'reaction',
       messageId,
@@ -1952,6 +2327,11 @@ class ChatApp {
     const maxSize = 10 * 1024 * 1024; // 10MB
     if (file.size > maxSize) {
       this.showToast('File size must be less than 10MB', 'error');
+      return;
+    }
+
+    if (!navigator.onLine) {
+      this.showToast('Cannot upload files while offline', 'error');
       return;
     }
 
@@ -2141,9 +2521,23 @@ class ChatApp {
   }
 
   // ============================================
-  // DIRECT MESSAGES
+  // DIRECT MESSAGES (WITH OFFLINE SUPPORT)
   // ============================================
   async loadDMConversations() {
+    if (!navigator.onLine) {
+      // Load from cache
+      const cached = localStorage.getItem('cachedDMConversations');
+      if (cached) {
+        try {
+          this.dmConversations = JSON.parse(cached);
+          this.renderDMList();
+        } catch (e) {
+          console.error('Failed to load cached DM conversations:', e);
+        }
+      }
+      return;
+    }
+
     try {
       const response = await this.apiRequest('/api/dm', {
         method: 'GET',
@@ -2152,10 +2546,22 @@ class ChatApp {
 
       if (response.conversations) {
         this.dmConversations = response.conversations;
+        // Cache conversations
+        localStorage.setItem('cachedDMConversations', JSON.stringify(response.conversations));
         this.renderDMList();
       }
     } catch (error) {
       console.error('Error loading DM conversations:', error);
+      // Load from cache
+      const cached = localStorage.getItem('cachedDMConversations');
+      if (cached) {
+        try {
+          this.dmConversations = JSON.parse(cached);
+          this.renderDMList();
+        } catch (e) {
+          console.error('Failed to load cached DM conversations:', e);
+        }
+      }
     }
   }
 
@@ -2325,6 +2731,21 @@ class ChatApp {
   }
 
   async loadDMMessages(userId) {
+    if (!navigator.onLine) {
+      // Load from cache
+      const cached = localStorage.getItem(`cachedDM_${userId}`);
+      if (cached) {
+        try {
+          const messages = JSON.parse(cached);
+          this.renderDMMessages(messages);
+          this.showToast('Showing cached messages', 'info');
+        } catch (e) {
+          console.error('Failed to load cached DM messages:', e);
+        }
+      }
+      return;
+    }
+
     try {
       const response = await this.apiRequest(`/api/dm/${userId}`, {
         method: 'GET',
@@ -2333,10 +2754,24 @@ class ChatApp {
 
       if (response.messages) {
         this.renderDMMessages(response.messages);
+        // Cache messages
+        localStorage.setItem(`cachedDM_${userId}`, JSON.stringify(response.messages));
       }
     } catch (error) {
       console.error('Error loading DM messages:', error);
-      this.showToast('Failed to load messages', 'error');
+      // Load from cache
+      const cached = localStorage.getItem(`cachedDM_${this.currentDM}`);
+      if (cached) {
+        try {
+          const messages = JSON.parse(cached);
+          this.renderDMMessages(messages);
+          this.showToast('Showing cached messages', 'info');
+        } catch (e) {
+          console.error('Failed to load cached DM messages:', e);
+        }
+      } else {
+        this.showToast('Failed to load messages', 'error');
+      }
     }
   }
 
@@ -2362,9 +2797,10 @@ class ChatApp {
       const isOwn = msg.userId === this.user?.id;
       const avatar = msg.avatar || this.generateDefaultAvatar(msg.username);
       const time = this.formatTime(msg.createdAt);
+      const pendingClass = msg.pending ? 'pending' : '';
 
       return `
-        <div class="message ${isOwn ? 'own' : ''}" data-message-id="${msg.id}">
+        <div class="message ${isOwn ? 'own' : ''} ${pendingClass}" data-message-id="${msg.id}">
           <img class="message-avatar" src="${avatar}" alt="">
           <div class="message-content">
             <div class="message-header">
@@ -2372,6 +2808,7 @@ class ChatApp {
               <span class="message-time">${time}</span>
             </div>
             <div class="message-text">${this.formatMessageText(msg.text)}</div>
+            ${msg.pending ? '<div class="pending-indicator"><i class="fas fa-clock"></i> Sending...</div>' : ''}
           </div>
         </div>
       `;
@@ -2407,6 +2844,25 @@ class ChatApp {
     const sendBtn = this.dmElements.sendBtn;
     if (sendBtn) sendBtn.disabled = true;
 
+    // Check if online
+    if (!navigator.onLine) {
+      // Queue for later
+      const queued = this.pollingService.queueOfflineMessage({
+        type: 'dm',
+        recipientId: this.currentDM,
+        text: text,
+        isDM: true
+      });
+      
+      // Show message immediately with "pending" indicator
+      this.showPendingDMMessage(queued);
+      this.showToast('Message queued - will send when online', 'info');
+      
+      if (sendBtn) sendBtn.disabled = false;
+      input.focus();
+      return;
+    }
+
     try {
       const response = await this.apiRequest(`/api/dm/${this.currentDM}`, {
         method: 'POST',
@@ -2416,16 +2872,84 @@ class ChatApp {
 
       if (response.success) {
         this.appendDMMessage(response.message);
+        // Update cache
+        this.updateDMCache(this.currentDM, response.message);
       } else {
-        this.showToast(response.error || 'Failed to send message', 'error');
+        // Queue message if send failed
+        const queued = this.pollingService.queueOfflineMessage({
+          type: 'dm',
+          recipientId: this.currentDM,
+          text: text,
+          isDM: true
+        });
+        
+        this.showPendingDMMessage(queued);
+        this.showToast(response.error || 'Message queued - will retry', 'warning');
       }
     } catch (error) {
       console.error('Error sending DM:', error);
-      this.showToast('Failed to send message', 'error');
+      // Queue message if send failed
+      const queued = this.pollingService.queueOfflineMessage({
+        type: 'dm',
+        recipientId: this.currentDM,
+        text: text,
+        isDM: true
+      });
+      
+      this.showPendingDMMessage(queued);
+      this.showToast('Message queued - will retry when connected', 'warning');
     } finally {
       if (sendBtn) sendBtn.disabled = false;
       input.focus();
     }
+  }
+
+  // Sync DM message to server (called by PollingService)
+  async syncDMMessageToServer(message) {
+    const response = await this.apiRequest(`/api/dm/${message.recipientId}`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${this.token}` },
+      body: JSON.stringify({ text: message.text })
+    });
+
+    if (!response.success) {
+      throw new Error(response.error || 'Failed to send DM');
+    }
+
+    return response.message;
+  }
+
+  // Show pending DM message in UI
+  showPendingDMMessage(message) {
+    const pendingMessage = {
+      id: message.id,
+      tempId: message.id,
+      userId: this.user?.id,
+      username: this.user?.username,
+      displayName: this.user?.displayName,
+      avatar: this.user?.avatar,
+      text: message.text,
+      createdAt: new Date(message.queuedAt).toISOString(),
+      pending: true
+    };
+    
+    this.appendDMMessage(pendingMessage);
+  }
+
+  // Update DM cache with new message
+  updateDMCache(userId, message) {
+    const cached = localStorage.getItem(`cachedDM_${userId}`);
+    let messages = [];
+    if (cached) {
+      try {
+        messages = JSON.parse(cached);
+      } catch (e) {
+        messages = [];
+      }
+    }
+    messages.push(message);
+    // Keep last 100 messages
+    localStorage.setItem(`cachedDM_${userId}`, JSON.stringify(messages.slice(-100)));
   }
 
   appendDMMessage(message) {
@@ -2445,9 +2969,10 @@ class ChatApp {
     const isOwn = message.userId === this.user?.id;
     const avatar = message.avatar || this.generateDefaultAvatar(message.username);
     const time = this.formatTime(message.createdAt);
+    const pendingClass = message.pending ? 'pending' : '';
 
     const messageEl = document.createElement('div');
-    messageEl.className = `message ${isOwn ? 'own' : ''}`;
+    messageEl.className = `message ${isOwn ? 'own' : ''} ${pendingClass}`;
     messageEl.dataset.messageId = message.id;
     messageEl.innerHTML = `
       <img class="message-avatar" src="${avatar}" alt="">
@@ -2457,6 +2982,7 @@ class ChatApp {
           <span class="message-time">${time}</span>
         </div>
         <div class="message-text">${this.formatMessageText(message.text)}</div>
+        ${message.pending ? '<div class="pending-indicator"><i class="fas fa-clock"></i> Sending...</div>' : ''}
       </div>
     `;
 
@@ -2491,6 +3017,8 @@ class ChatApp {
 
     if (this.dmElements.view?.classList.contains('active') && this.currentDM === data.message.userId) {
       this.appendDMMessage(data.message);
+      // Update cache
+      this.updateDMCache(this.currentDM, data.message);
     } else {
       this.showToast(`New message from ${data.message.displayName || data.message.username}`, 'info');
       this.playNotificationSound();
@@ -2521,6 +3049,11 @@ class ChatApp {
   // THREADS
   // ============================================
   async openThread(messageId) {
+    if (!navigator.onLine) {
+      this.showToast('Threads not available offline', 'warning');
+      return;
+    }
+
     try {
       const response = await this.apiRequest(`/api/threads/${messageId}`, {
         method: 'GET',
@@ -2597,6 +3130,11 @@ class ChatApp {
 
     if (!text || !this.currentThread) return;
 
+    if (!navigator.onLine) {
+      this.showToast('Cannot send thread reply while offline', 'warning');
+      return;
+    }
+
     try {
       const response = await this.apiRequest(`/api/threads/${this.currentThread}`, {
         method: 'POST',
@@ -2655,6 +3193,11 @@ class ChatApp {
   // PINNED MESSAGES
   // ============================================
   async loadPinnedMessages() {
+    if (!navigator.onLine) {
+      this.showToast('Pinned messages not available offline', 'warning');
+      return;
+    }
+
     try {
       const response = await this.apiRequest(`/api/rooms/${this.currentRoom}/pins`, {
         method: 'GET',
@@ -2719,6 +3262,11 @@ class ChatApp {
   }
 
   async pinMessage(messageId) {
+    if (!navigator.onLine) {
+      this.showToast('Cannot pin message while offline', 'warning');
+      return;
+    }
+
     try {
       const response = await this.apiRequest(`/api/rooms/${this.currentRoom}/pin`, {
         method: 'POST',
@@ -2738,6 +3286,11 @@ class ChatApp {
   }
 
   async unpinMessage(messageId) {
+    if (!navigator.onLine) {
+      this.showToast('Cannot unpin message while offline', 'warning');
+      return;
+    }
+
     try {
       const response = await this.apiRequest(`/api/rooms/${this.currentRoom}/pin/${messageId}`, {
         method: 'DELETE',
@@ -2830,6 +3383,17 @@ class ChatApp {
   }
 
   async openUserProfile(userId) {
+    if (!navigator.onLine) {
+      // Try to show cached user info
+      const user = this.onlineUsers.get(userId);
+      if (user) {
+        this.showCachedUserProfile(user);
+      } else {
+        this.showToast('User profile not available offline', 'warning');
+      }
+      return;
+    }
+
     try {
       const response = await this.apiRequest(`/api/users/${userId}`, {
         method: 'GET',
@@ -2842,42 +3406,77 @@ class ChatApp {
       }
 
       const user = response.user;
-      const modal = this.modals.userProfile;
-      if (!modal) return;
-
-      const avatar = user.avatar || this.generateDefaultAvatar(user.username);
-      const isOnline = this.onlineUsers.has(userId);
-      const status = isOnline ? 'online' : 'offline';
-
-      const avatarEl = modal.querySelector('.profile-avatar');
-      const statusEl = modal.querySelector('.profile-status-indicator');
-      const nameEl = modal.querySelector('.profile-name');
-      const usernameEl = modal.querySelector('.profile-username');
-      const badgeEl = modal.querySelector('.profile-status-badge');
-      const bioEl = modal.querySelector('.profile-bio');
-      const joinedEl = modal.querySelector('.profile-joined');
-      const userIdEl = modal.querySelector('.profile-user-id');
-
-      if (avatarEl) avatarEl.src = avatar;
-      if (statusEl) statusEl.className = `profile-status-indicator ${status}`;
-      if (nameEl) nameEl.textContent = user.displayName || user.username;
-      if (usernameEl) usernameEl.textContent = `@${user.username}`;
-      if (badgeEl) {
-        badgeEl.textContent = isOnline ? 'Online' : 'Offline';
-        badgeEl.className = `profile-status-badge ${status}`;
-      }
-      if (bioEl) bioEl.textContent = user.bio || 'No bio yet';
-      if (joinedEl) joinedEl.textContent = this.formatDateFull(user.createdAt);
-      if (userIdEl) userIdEl.textContent = user.id;
-
-      this.openModal('userProfile');
+      this.showUserProfileModal(user, userId);
     } catch (error) {
       console.error('Error loading user profile:', error);
       this.showToast('Failed to load profile', 'error');
     }
   }
 
+  showCachedUserProfile(user) {
+    const modal = this.modals.userProfile;
+    if (!modal) return;
+
+    const avatar = user.avatar || this.generateDefaultAvatar(user.username);
+
+    const avatarEl = modal.querySelector('.profile-avatar');
+    const statusEl = modal.querySelector('.profile-status-indicator');
+    const nameEl = modal.querySelector('.profile-name');
+    const usernameEl = modal.querySelector('.profile-username');
+    const badgeEl = modal.querySelector('.profile-status-badge');
+    const bioEl = modal.querySelector('.profile-bio');
+
+    if (avatarEl) avatarEl.src = avatar;
+    if (statusEl) statusEl.className = `profile-status-indicator ${user.status || 'offline'}`;
+    if (nameEl) nameEl.textContent = user.displayName || user.username;
+    if (usernameEl) usernameEl.textContent = `@${user.username}`;
+    if (badgeEl) {
+      badgeEl.textContent = user.status || 'Offline';
+      badgeEl.className = `profile-status-badge ${user.status || 'offline'}`;
+    }
+    if (bioEl) bioEl.textContent = user.bio || 'No bio available';
+
+    this.openModal('userProfile');
+  }
+
+  showUserProfileModal(user, userId) {
+    const modal = this.modals.userProfile;
+    if (!modal) return;
+
+    const avatar = user.avatar || this.generateDefaultAvatar(user.username);
+    const isOnline = this.onlineUsers.has(userId);
+    const status = isOnline ? 'online' : 'offline';
+
+    const avatarEl = modal.querySelector('.profile-avatar');
+    const statusEl = modal.querySelector('.profile-status-indicator');
+    const nameEl = modal.querySelector('.profile-name');
+    const usernameEl = modal.querySelector('.profile-username');
+    const badgeEl = modal.querySelector('.profile-status-badge');
+    const bioEl = modal.querySelector('.profile-bio');
+    const joinedEl = modal.querySelector('.profile-joined');
+    const userIdEl = modal.querySelector('.profile-user-id');
+
+    if (avatarEl) avatarEl.src = avatar;
+    if (statusEl) statusEl.className = `profile-status-indicator ${status}`;
+    if (nameEl) nameEl.textContent = user.displayName || user.username;
+    if (usernameEl) usernameEl.textContent = `@${user.username}`;
+    if (badgeEl) {
+      badgeEl.textContent = isOnline ? 'Online' : 'Offline';
+      badgeEl.className = `profile-status-badge ${status}`;
+    }
+    if (bioEl) bioEl.textContent = user.bio || 'No bio yet';
+    if (joinedEl) joinedEl.textContent = this.formatDateFull(user.createdAt);
+    if (userIdEl) userIdEl.textContent = user.id;
+
+    this.openModal('userProfile');
+  }
+
   changeStatus(status) {
+    if (!navigator.onLine) {
+      this.showToast('Cannot change status while offline', 'warning');
+      return;
+    }
+
     this.wsSend({
       type: 'status_change',
       status
@@ -2900,6 +3499,12 @@ class ChatApp {
       return;
     }
 
+    if (!navigator.onLine) {
+      // Search in cached messages
+      this.searchCachedMessages(query);
+      return;
+    }
+
     try {
       const response = await this.apiRequest(
         `/api/messages/search/${encodeURIComponent(query)}?roomId=${this.currentRoom}`,
@@ -2914,7 +3519,18 @@ class ChatApp {
       }
     } catch (error) {
       console.error('Search error:', error);
+      // Fall back to cached search
+      this.searchCachedMessages(query);
     }
+  }
+
+  searchCachedMessages(query) {
+    const lowerQuery = query.toLowerCase();
+    const roomMessages = this.messages.get(this.currentRoom) || [];
+    const matches = roomMessages.filter(msg => 
+      msg.text && msg.text.toLowerCase().includes(lowerQuery)
+    );
+    this.highlightSearchResults(matches);
   }
 
   highlightSearchResults(messages) {
@@ -2942,12 +3558,20 @@ class ChatApp {
     this.contextMenuTarget = messageEl;
     const userId = messageEl.dataset.userId;
     const isOwn = userId === this.user?.id;
+    const isPending = messageEl.classList.contains('pending');
 
     const editItem = this.contextMenu?.querySelector('[data-action="edit"]');
     const deleteItem = this.contextMenu?.querySelector('[data-action="delete"]');
+    const replyItem = this.contextMenu?.querySelector('[data-action="reply"]');
+    const reactItem = this.contextMenu?.querySelector('[data-action="react"]');
+    const pinItem = this.contextMenu?.querySelector('[data-action="pin"]');
 
-    if (editItem) editItem.style.display = isOwn ? 'flex' : 'none';
-    if (deleteItem) deleteItem.style.display = isOwn ? 'flex' : 'none';
+    // Hide actions for pending messages
+    if (editItem) editItem.style.display = isOwn && !isPending ? 'flex' : 'none';
+    if (deleteItem) deleteItem.style.display = isOwn && !isPending ? 'flex' : 'none';
+    if (replyItem) replyItem.style.display = !isPending ? 'flex' : 'none';
+    if (reactItem) reactItem.style.display = !isPending ? 'flex' : 'none';
+    if (pinItem) pinItem.style.display = !isPending ? 'flex' : 'none';
 
     if (this.contextMenu) {
       this.contextMenu.style.left = `${event.pageX}px`;
@@ -3095,6 +3719,18 @@ class ChatApp {
     const soundEnabled = this.settingsModalElements.soundToggle?.checked;
     const desktopNotifications = this.settingsModalElements.desktopNotificationsToggle?.checked;
 
+    // Save local settings regardless of online status
+    this.settings.soundEnabled = soundEnabled;
+    this.settings.desktopNotifications = desktopNotifications;
+    localStorage.setItem('chatSettings', JSON.stringify(this.settings));
+    this.setTheme(theme);
+
+    if (!navigator.onLine) {
+      this.closeAllModals();
+      this.showToast('Settings saved locally - will sync when online', 'info');
+      return;
+    }
+
     try {
       const response = await this.apiRequest('/api/users/profile', {
         method: 'PUT',
@@ -3110,11 +3746,8 @@ class ChatApp {
 
       if (response.success) {
         this.user = response.user;
-        this.settings.soundEnabled = soundEnabled;
-        this.settings.desktopNotifications = desktopNotifications;
-        localStorage.setItem('chatSettings', JSON.stringify(this.settings));
+        localStorage.setItem('cachedUser', JSON.stringify(response.user));
 
-        this.setTheme(theme);
         this.updateUI();
         this.closeAllModals();
         this.showToast('Settings saved', 'success');
@@ -3127,13 +3760,19 @@ class ChatApp {
       }
     } catch (error) {
       console.error('Save settings error:', error);
-      this.showToast('Failed to save settings', 'error');
+      this.showToast('Settings saved locally - will sync when online', 'warning');
+      this.closeAllModals();
     }
   }
 
   async uploadAvatar(event) {
     const file = event.target.files?.[0];
     if (!file) return;
+
+    if (!navigator.onLine) {
+      this.showToast('Cannot upload avatar while offline', 'error');
+      return;
+    }
 
     const formData = new FormData();
     formData.append('avatar', file);
@@ -3149,6 +3788,7 @@ class ChatApp {
 
       if (response.ok && data.success) {
         this.user.avatar = data.avatar;
+        localStorage.setItem('cachedUser', JSON.stringify(this.user));
         this.updateUI();
         this.showToast('Avatar updated', 'success');
       } else {
@@ -3441,6 +4081,12 @@ class ChatApp {
   // API REQUEST
   // ============================================
   async apiRequest(url, options = {}) {
+    // Check if offline
+    if (!navigator.onLine) {
+      console.log('[API] Offline - request blocked:', url);
+      return { error: 'You are offline', offline: true };
+    }
+
     try {
       const headers = {
         'Content-Type': 'application/json',
@@ -3572,4 +4218,4 @@ const app = new ChatApp();
 // Make app globally accessible for onclick handlers
 window.app = app;
 
-console.log('🚀 ChatHub with Polling Support initialized');
+console.log('🚀 ChatHub with Polling & Offline Support initialized');

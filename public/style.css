@@ -4268,3 +4268,106 @@ select {
 .animate-pulse { animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
 .animate-bounce { animation: bounce 1s infinite; }
 .animate-none { animation: none; }
+
+/* ============================================
+   OFFLINE & PENDING MESSAGE STYLES
+   ============================================ */
+
+/* Pending message indicator */
+.message.pending {
+  opacity: 0.7;
+}
+
+.message.pending .message-content {
+  position: relative;
+}
+
+.pending-indicator {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  margin-top: 5px;
+  padding: 3px 8px;
+  background: var(--bg-tertiary);
+  border-radius: 10px;
+  width: fit-content;
+}
+
+.pending-indicator i {
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 0.5; }
+  50% { opacity: 1; }
+}
+
+/* Connection status indicator */
+.connection-status {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  margin-left: 10px;
+  cursor: help;
+  transition: background-color 0.3s ease;
+}
+
+.connection-status.online {
+  background-color: #4CAF50;
+  box-shadow: 0 0 5px #4CAF50;
+}
+
+.connection-status.polling {
+  background-color: #FF9800;
+  box-shadow: 0 0 5px #FF9800;
+}
+
+.connection-status.connecting {
+  background-color: #2196F3;
+  animation: blink 1s ease-in-out infinite;
+}
+
+.connection-status.offline {
+  background-color: #f44336;
+  box-shadow: 0 0 5px #f44336;
+}
+
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+/* Offline banner (optional) */
+.offline-banner {
+  display: none;
+  background: linear-gradient(135deg, #f44336, #e91e63);
+  color: white;
+  padding: 8px 15px;
+  text-align: center;
+  font-size: 0.85rem;
+  font-weight: 500;
+}
+
+.offline-banner.active {
+  display: block;
+}
+
+.offline-banner i {
+  margin-right: 8px;
+}
+
+/* Queued messages count badge */
+.queued-badge {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  background: #f44336;
+  color: white;
+  font-size: 0.7rem;
+  padding: 2px 6px;
+  border-radius: 10px;
+  min-width: 18px;
+  text-align: center;
+}
