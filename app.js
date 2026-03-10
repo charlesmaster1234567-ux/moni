@@ -159,23 +159,14 @@
     };
 
     // ============================================
-    // DOM HELPERS
+    // DOM HELPERS (Fixed caching bug)
     // ============================================
-    const elements = {};
-
     function $(id) {
-        if (!elements[id]) {
-            elements[id] = document.getElementById(id);
-        }
-        return elements[id];
+        return document.getElementById(id); // Removed cache to prevent detached node bugs
     }
 
     function $$(selector) {
         return document.querySelectorAll(selector);
-    }
-
-    function clearElementCache() {
-        Object.keys(elements).forEach(key => delete elements[key]);
     }
 
     // ============================================
@@ -3289,14 +3280,18 @@
                 el.onclick = () => Rooms.join(el.dataset.roomId);
             });
         },
-
         updateRoomHeader() {
             const room = state.rooms.find(r => r.id === state.currentRoom);
             if (room) {
-                $('chat-room-icon').textContent = room.icon || '💬';
-                $('chat-room-name').textContent = room.name;
-                $('chat-room-description').textContent = room.description || '';
-                $('welcome-room-name').textContent = room.name;
+                const icon = $('chat-room-icon');
+                const name = $('chat-room-name');
+                const desc = $('chat-room-description');
+                const welcome = $('welcome-room-name');
+
+                if (icon) icon.textContent = room.icon || '💬';
+                if (name) name.textContent = room.name;
+                if (desc) desc.textContent = room.description || '';
+                if (welcome) welcome.textContent = room.name;
             }
         },
 
