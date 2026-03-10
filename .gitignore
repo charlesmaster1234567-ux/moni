@@ -36,3 +36,10 @@ build/
 # Temporary files
 tmp/
 temp/
+
+node_modules/
+public/uploads/
+data/
+*.log
+.env
+.DS_Store
