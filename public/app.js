@@ -1,7 +1,28 @@
 // ============================================
 // CHATHUB - REAL-TIME CHAT APPLICATION
-// Complete Client-Side Application with Polling & Offline Support
+// Enhanced with Admin/Master Features, More Themes & Improved Avatars
 // ============================================
+
+// ============================================
+// CONSTANTS & CONFIGURATION
+// ============================================
+const CONFIG = {
+  MAX_FILE_SIZE: 10 * 1024 * 1024, // 10MB
+  MAX_AVATAR_SIZE: 5 * 1024 * 1024, // 5MB
+  ALLOWED_AVATAR_TYPES: ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/svg+xml'],
+  ALLOWED_AVATAR_EXTENSIONS: ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg'],
+  POLL_INTERVAL: 2000,
+  MAX_RECONNECT_ATTEMPTS: 5,
+  PING_INTERVAL: 30000,
+  MESSAGE_CACHE_LIMIT: 100,
+  THEMES: ['dark', 'light', 'midnight', 'nature', 'sunset', 'ocean', 'forest', 'cherry', 'cyberpunk', 'lavender', 'mocha', 'arctic', 'volcano', 'galaxy', 'retro'],
+  USER_ROLES: {
+    MASTER: 'master',
+    ADMIN: 'admin',
+    MODERATOR: 'moderator',
+    MEMBER: 'member'
+  }
+};
 
 // ============================================
 // POLLING SERVICE - Syncs messages when WebSocket is down
@@ -10,7 +31,7 @@ class PollingService {
   constructor(app) {
     this.app = app;
     this.pollInterval = null;
-    this.pollIntervalMs = 2000; // Poll every 2 seconds
+    this.pollIntervalMs = CONFIG.POLL_INTERVAL;
     this.isPolling = false;
     this.lastRoomMessageId = null;
     this.lastDMCheck = 0;
@@ -24,9 +45,7 @@ class PollingService {
     this.initOfflineSupport();
   }
 
-  // Initialize offline support
   initOfflineSupport() {
-    // Load queued messages from localStorage
     const stored = localStorage.getItem('offlineMessageQueue');
     if (stored) {
       try {
@@ -38,7 +57,6 @@ class PollingService {
       }
     }
 
-    // Listen for online/offline events
     window.addEventListener('online', () => {
       console.log('[Offline] Connection restored - syncing queued messages');
       this.isOnline = true;
@@ -54,7 +72,6 @@ class PollingService {
     });
   }
 
-  // Queue message for offline sending
   queueOfflineMessage(message) {
     const queuedMessage = {
       ...message,
@@ -70,7 +87,6 @@ class PollingService {
     return queuedMessage;
   }
 
-  // Save queue to localStorage
   saveOfflineQueue() {
     try {
       localStorage.setItem('offlineMessageQueue', JSON.stringify(this.offlineQueue));
@@ -79,7 +95,6 @@ class PollingService {
     }
   }
 
-  // Sync offline messages when back online
   async syncOfflineMessages() {
     if (this.offlineQueue.length === 0) {
       console.log('[Offline] No queued messages to sync');
@@ -104,13 +119,10 @@ class PollingService {
         }
         successCount++;
         console.log('[Offline] Synced message:', message.id);
-        
-        // Remove pending indicator from UI
         this.app.markMessageAsSent(message.id);
       } catch (error) {
         console.error('[Offline] Failed to sync message:', error);
         failCount++;
-        // Re-queue failed messages
         this.offlineQueue.push(message);
       }
     }
@@ -125,12 +137,10 @@ class PollingService {
     }
   }
 
-  // Get queued message count
   getQueuedCount() {
     return this.offlineQueue.length;
   }
 
-  // Clear all queued messages (for logout)
   clearQueue() {
     this.offlineQueue = [];
     this.saveOfflineQueue();
@@ -147,7 +157,6 @@ class PollingService {
       this.poll();
     }, this.pollIntervalMs);
 
-    // Initial poll after a short delay
     setTimeout(() => this.poll(), 1000);
   }
 
@@ -161,21 +170,17 @@ class PollingService {
   }
 
   async poll() {
-    // Don't poll if WebSocket is connected and working
     if (this.app.ws && this.app.ws.readyState === WebSocket.OPEN) {
       return;
     }
 
-    // Don't poll if already polling or no token
     if (this.isPolling || !this.app.token) return;
 
-    // Don't poll if offline
     if (!navigator.onLine) {
       console.log('[Polling] Skipping poll - offline');
       return;
     }
 
-    // Don't poll if too many consecutive errors
     if (this.consecutiveErrors >= this.maxConsecutiveErrors) {
       console.log('[Polling] Too many errors, pausing...');
       return;
@@ -204,10 +209,8 @@ class PollingService {
         return;
       }
 
-      // Reset error count on success
       this.consecutiveErrors = 0;
 
-      // Process new room messages
       if (response.roomMessages && response.roomMessages.length > 0) {
         console.log(`[Polling] Got ${response.roomMessages.length} new room messages`);
         
@@ -216,12 +219,10 @@ class PollingService {
         }
       }
 
-      // Update last message ID
       if (response.lastRoomMessageId) {
         this.lastRoomMessageId = response.lastRoomMessageId;
       }
 
-      // Process new DM messages
       if (response.dmMessages && response.dmMessages.length > 0) {
         console.log(`[Polling] Got ${response.dmMessages.length} new DM conversations with messages`);
         
@@ -235,10 +236,8 @@ class PollingService {
         }
       }
 
-      // Update timestamp for next DM check
       this.lastDMCheck = response.timestamp || Date.now();
 
-      // Update online users
       if (response.onlineUsers) {
         this.app.onlineUsers = new Map(response.onlineUsers.map(u => [u.id, u]));
         this.app.updateUsersList();
@@ -253,20 +252,17 @@ class PollingService {
     }
   }
 
-  // Call this when user joins a room
   setRoom(roomId, lastMessageId = null) {
     this.lastRoomMessageId = lastMessageId;
     console.log(`[Polling] Room set to ${roomId}, lastMessageId: ${lastMessageId}`);
   }
 
-  // Reset for new session
   reset() {
     this.lastRoomMessageId = null;
     this.lastDMCheck = 0;
     this.consecutiveErrors = 0;
   }
 
-  // Adjust polling interval
   setInterval(ms) {
     this.pollIntervalMs = ms;
     if (this.pollInterval) {
@@ -277,6 +273,771 @@ class PollingService {
 }
 
 // ============================================
+// AVATAR SERVICE - Handles multiple image formats
+// ============================================
+class AvatarService {
+  constructor() {
+    this.allowedTypes = CONFIG.ALLOWED_AVATAR_TYPES;
+    this.maxSize = CONFIG.MAX_AVATAR_SIZE;
+    this.defaultColors = [
+      '#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEAA7',
+      '#DDA0DD', '#98D8C8', '#F7DC6F', '#BB8FCE', '#85C1E9',
+      '#F8B500', '#00D4AA', '#FF6F61', '#6B5B95', '#88B04B',
+      '#E74C3C', '#3498DB', '#2ECC71', '#9B59B6', '#F39C12',
+      '#1ABC9C', '#E91E63', '#00BCD4', '#FF5722', '#607D8B'
+    ];
+  }
+
+  validateFile(file) {
+    const errors = [];
+
+    if (!file) {
+      errors.push('No file provided');
+      return { valid: false, errors };
+    }
+
+    // Check file type
+    if (!this.allowedTypes.includes(file.type)) {
+      errors.push(`Invalid file type. Allowed: ${CONFIG.ALLOWED_AVATAR_EXTENSIONS.join(', ')}`);
+    }
+
+    // Check file size
+    if (file.size > this.maxSize) {
+      errors.push(`File too large. Maximum size: ${this.formatSize(this.maxSize)}`);
+    }
+
+    // Check file extension
+    const extension = '.' + file.name.split('.').pop().toLowerCase();
+    if (!CONFIG.ALLOWED_AVATAR_EXTENSIONS.includes(extension)) {
+      errors.push(`Invalid file extension. Allowed: ${CONFIG.ALLOWED_AVATAR_EXTENSIONS.join(', ')}`);
+    }
+
+    return {
+      valid: errors.length === 0,
+      errors
+    };
+  }
+
+  formatSize(bytes) {
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
+    return (bytes / 1048576).toFixed(1) + ' MB';
+  }
+
+  async compressImage(file, maxWidth = 256, maxHeight = 256, quality = 0.8) {
+    return new Promise((resolve, reject) => {
+      // Skip compression for SVG
+      if (file.type === 'image/svg+xml') {
+        resolve(file);
+        return;
+      }
+
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      const img = new Image();
+
+      img.onload = () => {
+        let { width, height } = img;
+
+        // Calculate new dimensions
+        if (width > maxWidth || height > maxHeight) {
+          const ratio = Math.min(maxWidth / width, maxHeight / height);
+          width *= ratio;
+          height *= ratio;
+        }
+
+        canvas.width = width;
+        canvas.height = height;
+
+        // Draw and compress
+        ctx.drawImage(img, 0, 0, width, height);
+
+        canvas.toBlob(
+          (blob) => {
+            if (blob) {
+              const compressedFile = new File([blob], file.name, {
+                type: file.type === 'image/png' ? 'image/png' : 'image/jpeg',
+                lastModified: Date.now()
+              });
+              resolve(compressedFile);
+            } else {
+              resolve(file);
+            }
+          },
+          file.type === 'image/png' ? 'image/png' : 'image/jpeg',
+          quality
+        );
+      };
+
+      img.onerror = () => reject(new Error('Failed to load image'));
+      img.src = URL.createObjectURL(file);
+    });
+  }
+
+  async createPreview(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = (e) => resolve(e.target.result);
+      reader.onerror = () => reject(new Error('Failed to read file'));
+      reader.readAsDataURL(file);
+    });
+  }
+
+  generateDefault(username, size = 100) {
+    const color = this.defaultColors[(username || 'U').charCodeAt(0) % this.defaultColors.length];
+    const initial = ((username || 'U')[0] || 'U').toUpperCase();
+
+    return `data:image/svg+xml,${encodeURIComponent(`
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${size} ${size}">
+        <rect width="${size}" height="${size}" fill="${color}"/>
+        <text x="50%" y="50%" dy="0.35em" text-anchor="middle" 
+              font-family="Arial, sans-serif" font-size="${size * 0.45}" font-weight="bold" fill="white">
+          ${initial}
+        </text>
+      </svg>
+    `)}`;
+  }
+
+  generateGradient(username, size = 100) {
+    const colors = this.defaultColors;
+    const index1 = (username || 'U').charCodeAt(0) % colors.length;
+    const index2 = ((username || 'U').charCodeAt(1) || 0) % colors.length;
+    const color1 = colors[index1];
+    const color2 = colors[index2 !== index1 ? index2 : (index1 + 1) % colors.length];
+    const initial = ((username || 'U')[0] || 'U').toUpperCase();
+
+    return `data:image/svg+xml,${encodeURIComponent(`
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${size} ${size}">
+        <defs>
+          <linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" style="stop-color:${color1}"/>
+            <stop offset="100%" style="stop-color:${color2}"/>
+          </linearGradient>
+        </defs>
+        <rect width="${size}" height="${size}" fill="url(#grad)"/>
+        <text x="50%" y="50%" dy="0.35em" text-anchor="middle" 
+              font-family="Arial, sans-serif" font-size="${size * 0.45}" font-weight="bold" fill="white">
+          ${initial}
+        </text>
+      </svg>
+    `)}`;
+  }
+}
+
+// ============================================
+// ADMIN SERVICE - Handles admin & master operations
+// ============================================
+class AdminService {
+  constructor(app) {
+    this.app = app;
+  }
+
+  // Check if current user is master
+  isMaster() {
+    return this.app.user?.role === CONFIG.USER_ROLES.MASTER;
+  }
+
+  // Check if current user is admin of a room
+  isRoomAdmin(roomId) {
+    const room = this.app.rooms.find(r => r.id === roomId);
+    if (!room) return false;
+    return room.adminIds?.includes(this.app.user?.id) || this.isMaster();
+  }
+
+  // Check if current user is moderator of a room
+  isRoomModerator(roomId) {
+    const room = this.app.rooms.find(r => r.id === roomId);
+    if (!room) return false;
+    return room.moderatorIds?.includes(this.app.user?.id) || this.isRoomAdmin(roomId);
+  }
+
+  // Check if user can manage another user
+  canManageUser(targetUserId) {
+    if (this.isMaster()) return true;
+    if (targetUserId === this.app.user?.id) return false;
+    
+    const targetUser = this.app.onlineUsers.get(targetUserId);
+    if (!targetUser) return false;
+    
+    // Admins can manage non-admin users
+    if (this.app.user?.role === CONFIG.USER_ROLES.ADMIN) {
+      return targetUser.role !== CONFIG.USER_ROLES.MASTER && targetUser.role !== CONFIG.USER_ROLES.ADMIN;
+    }
+    
+    return false;
+  }
+
+  // Get permission level
+  getPermissionLevel(role) {
+    const levels = {
+      [CONFIG.USER_ROLES.MASTER]: 4,
+      [CONFIG.USER_ROLES.ADMIN]: 3,
+      [CONFIG.USER_ROLES.MODERATOR]: 2,
+      [CONFIG.USER_ROLES.MEMBER]: 1
+    };
+    return levels[role] || 0;
+  }
+
+  // ============================================
+  // MASTER FUNCTIONS
+  // ============================================
+  
+  async deleteAnyMessage(messageId, roomId) {
+    if (!this.isMaster() && !this.isRoomModerator(roomId)) {
+      this.app.showToast('Permission denied', 'error');
+      return false;
+    }
+
+    try {
+      const response = await this.app.apiRequest(`/api/admin/messages/${messageId}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${this.app.token}` },
+        body: JSON.stringify({ roomId, force: this.isMaster() })
+      });
+
+      if (response.success) {
+        this.app.showToast('Message deleted', 'success');
+        return true;
+      } else {
+        this.app.showToast(response.error || 'Failed to delete message', 'error');
+        return false;
+      }
+    } catch (error) {
+      console.error('Delete message error:', error);
+      this.app.showToast('Failed to delete message', 'error');
+      return false;
+    }
+  }
+
+  async banUser(userId, reason = '', duration = null) {
+    if (!this.isMaster() && !this.app.user?.role === CONFIG.USER_ROLES.ADMIN) {
+      this.app.showToast('Permission denied', 'error');
+      return false;
+    }
+
+    try {
+      const response = await this.app.apiRequest(`/api/admin/users/${userId}/ban`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${this.app.token}` },
+        body: JSON.stringify({ reason, duration })
+      });
+
+      if (response.success) {
+        this.app.showToast(`User banned${duration ? ` for ${duration}` : ' permanently'}`, 'success');
+        return true;
+      } else {
+        this.app.showToast(response.error || 'Failed to ban user', 'error');
+        return false;
+      }
+    } catch (error) {
+      console.error('Ban user error:', error);
+      this.app.showToast('Failed to ban user', 'error');
+      return false;
+    }
+  }
+
+  async unbanUser(userId) {
+    if (!this.isMaster() && !this.app.user?.role === CONFIG.USER_ROLES.ADMIN) {
+      this.app.showToast('Permission denied', 'error');
+      return false;
+    }
+
+    try {
+      const response = await this.app.apiRequest(`/api/admin/users/${userId}/unban`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${this.app.token}` }
+      });
+
+      if (response.success) {
+        this.app.showToast('User unbanned', 'success');
+        return true;
+      } else {
+        this.app.showToast(response.error || 'Failed to unban user', 'error');
+        return false;
+      }
+    } catch (error) {
+      console.error('Unban user error:', error);
+      this.app.showToast('Failed to unban user', 'error');
+      return false;
+    }
+  }
+
+  async deleteUserAccount(userId) {
+    if (!this.isMaster()) {
+      this.app.showToast('Only master can delete accounts', 'error');
+      return false;
+    }
+
+    try {
+      const response = await this.app.apiRequest(`/api/admin/users/${userId}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${this.app.token}` }
+      });
+
+      if (response.success) {
+        this.app.showToast('User account deleted', 'success');
+        this.app.onlineUsers.delete(userId);
+        this.app.updateUsersList();
+        return true;
+      } else {
+        this.app.showToast(response.error || 'Failed to delete account', 'error');
+        return false;
+      }
+    } catch (error) {
+      console.error('Delete account error:', error);
+      this.app.showToast('Failed to delete account', 'error');
+      return false;
+    }
+  }
+
+  async modifyUserProfile(userId, updates) {
+    if (!this.isMaster()) {
+      this.app.showToast('Only master can modify profiles', 'error');
+      return false;
+    }
+
+    try {
+      const response = await this.app.apiRequest(`/api/admin/users/${userId}/profile`, {
+        method: 'PUT',
+        headers: { 'Authorization': `Bearer ${this.app.token}` },
+        body: JSON.stringify(updates)
+      });
+
+      if (response.success) {
+        this.app.showToast('User profile updated', 'success');
+        return true;
+      } else {
+        this.app.showToast(response.error || 'Failed to update profile', 'error');
+        return false;
+      }
+    } catch (error) {
+      console.error('Modify profile error:', error);
+      this.app.showToast('Failed to update profile', 'error');
+      return false;
+    }
+  }
+
+  async setUserRole(userId, role) {
+    if (!this.isMaster()) {
+      this.app.showToast('Only master can change roles', 'error');
+      return false;
+    }
+
+    try {
+      const response = await this.app.apiRequest(`/api/admin/users/${userId}/role`, {
+        method: 'PUT',
+        headers: { 'Authorization': `Bearer ${this.app.token}` },
+        body: JSON.stringify({ role })
+      });
+
+      if (response.success) {
+        this.app.showToast(`User role changed to ${role}`, 'success');
+        const user = this.app.onlineUsers.get(userId);
+        if (user) {
+          user.role = role;
+          this.app.updateUsersList();
+        }
+        return true;
+      } else {
+        this.app.showToast(response.error || 'Failed to change role', 'error');
+        return false;
+      }
+    } catch (error) {
+      console.error('Set role error:', error);
+      this.app.showToast('Failed to change role', 'error');
+      return false;
+    }
+  }
+
+  async sendSystemAnnouncement(message, targetRooms = []) {
+    if (!this.isMaster() && this.app.user?.role !== CONFIG.USER_ROLES.ADMIN) {
+      this.app.showToast('Permission denied', 'error');
+      return false;
+    }
+
+    try {
+      const response = await this.app.apiRequest('/api/admin/announcement', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${this.app.token}` },
+        body: JSON.stringify({ message, targetRooms })
+      });
+
+      if (response.success) {
+        this.app.showToast('Announcement sent', 'success');
+        return true;
+      } else {
+        this.app.showToast(response.error || 'Failed to send announcement', 'error');
+        return false;
+      }
+    } catch (error) {
+      console.error('Announcement error:', error);
+      this.app.showToast('Failed to send announcement', 'error');
+      return false;
+    }
+  }
+
+  async getAllUsers(page = 1, limit = 50, search = '') {
+    if (!this.isMaster() && this.app.user?.role !== CONFIG.USER_ROLES.ADMIN) {
+      return { users: [], total: 0 };
+    }
+
+    try {
+      const params = new URLSearchParams({ page, limit, search });
+      const response = await this.app.apiRequest(`/api/admin/users?${params}`, {
+        method: 'GET',
+        headers: { 'Authorization': `Bearer ${this.app.token}` }
+      });
+
+      return response;
+    } catch (error) {
+      console.error('Get users error:', error);
+      return { users: [], total: 0 };
+    }
+  }
+
+  async getBannedUsers() {
+    if (!this.isMaster() && this.app.user?.role !== CONFIG.USER_ROLES.ADMIN) {
+      return [];
+    }
+
+    try {
+      const response = await this.app.apiRequest('/api/admin/users/banned', {
+        method: 'GET',
+        headers: { 'Authorization': `Bearer ${this.app.token}` }
+      });
+
+      return response.users || [];
+    } catch (error) {
+      console.error('Get banned users error:', error);
+      return [];
+    }
+  }
+
+  async getSystemStats() {
+    if (!this.isMaster()) {
+      return null;
+    }
+
+    try {
+      const response = await this.app.apiRequest('/api/admin/stats', {
+        method: 'GET',
+        headers: { 'Authorization': `Bearer ${this.app.token}` }
+      });
+
+      return response;
+    } catch (error) {
+      console.error('Get stats error:', error);
+      return null;
+    }
+  }
+
+  // ============================================
+  // CHANNEL ADMIN FUNCTIONS
+  // ============================================
+
+  async kickUserFromRoom(userId, roomId) {
+    if (!this.isRoomModerator(roomId)) {
+      this.app.showToast('Permission denied', 'error');
+      return false;
+    }
+
+    try {
+      const response = await this.app.apiRequest(`/api/rooms/${roomId}/kick`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${this.app.token}` },
+        body: JSON.stringify({ userId })
+      });
+
+      if (response.success) {
+        this.app.showToast('User kicked from channel', 'success');
+        return true;
+      } else {
+        this.app.showToast(response.error || 'Failed to kick user', 'error');
+        return false;
+      }
+    } catch (error) {
+      console.error('Kick user error:', error);
+      this.app.showToast('Failed to kick user', 'error');
+      return false;
+    }
+  }
+
+  async muteUserInRoom(userId, roomId, duration = 60) {
+    if (!this.isRoomModerator(roomId)) {
+      this.app.showToast('Permission denied', 'error');
+      return false;
+    }
+
+    try {
+      const response = await this.app.apiRequest(`/api/rooms/${roomId}/mute`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${this.app.token}` },
+        body: JSON.stringify({ userId, duration })
+      });
+
+      if (response.success) {
+        this.app.showToast(`User muted for ${duration} minutes`, 'success');
+        return true;
+      } else {
+        this.app.showToast(response.error || 'Failed to mute user', 'error');
+        return false;
+      }
+    } catch (error) {
+      console.error('Mute user error:', error);
+      this.app.showToast('Failed to mute user', 'error');
+      return false;
+    }
+  }
+
+  async unmuteUserInRoom(userId, roomId) {
+    if (!this.isRoomModerator(roomId)) {
+      this.app.showToast('Permission denied', 'error');
+      return false;
+    }
+
+    try {
+      const response = await this.app.apiRequest(`/api/rooms/${roomId}/unmute`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${this.app.token}` },
+        body: JSON.stringify({ userId })
+      });
+
+      if (response.success) {
+        this.app.showToast('User unmuted', 'success');
+        return true;
+      } else {
+        this.app.showToast(response.error || 'Failed to unmute user', 'error');
+        return false;
+      }
+    } catch (error) {
+      console.error('Unmute user error:', error);
+      this.app.showToast('Failed to unmute user', 'error');
+      return false;
+    }
+  }
+
+  async setRoomModerator(userId, roomId) {
+    if (!this.isRoomAdmin(roomId)) {
+      this.app.showToast('Only admins can set moderators', 'error');
+      return false;
+    }
+
+    try {
+      const response = await this.app.apiRequest(`/api/rooms/${roomId}/moderators`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${this.app.token}` },
+        body: JSON.stringify({ userId })
+      });
+
+      if (response.success) {
+        this.app.showToast('User is now a moderator', 'success');
+        return true;
+      } else {
+        this.app.showToast(response.error || 'Failed to set moderator', 'error');
+        return false;
+      }
+    } catch (error) {
+      console.error('Set moderator error:', error);
+      this.app.showToast('Failed to set moderator', 'error');
+      return false;
+    }
+  }
+
+  async removeRoomModerator(userId, roomId) {
+    if (!this.isRoomAdmin(roomId)) {
+      this.app.showToast('Only admins can remove moderators', 'error');
+      return false;
+    }
+
+    try {
+      const response = await this.app.apiRequest(`/api/rooms/${roomId}/moderators/${userId}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${this.app.token}` }
+      });
+
+      if (response.success) {
+        this.app.showToast('Moderator removed', 'success');
+        return true;
+      } else {
+        this.app.showToast(response.error || 'Failed to remove moderator', 'error');
+        return false;
+      }
+    } catch (error) {
+      console.error('Remove moderator error:', error);
+      this.app.showToast('Failed to remove moderator', 'error');
+      return false;
+    }
+  }
+
+  async updateRoomSettings(roomId, settings) {
+    if (!this.isRoomAdmin(roomId)) {
+      this.app.showToast('Only admins can change settings', 'error');
+      return false;
+    }
+
+    try {
+      const response = await this.app.apiRequest(`/api/rooms/${roomId}/settings`, {
+        method: 'PUT',
+        headers: { 'Authorization': `Bearer ${this.app.token}` },
+        body: JSON.stringify(settings)
+      });
+
+      if (response.success) {
+        this.app.showToast('Room settings updated', 'success');
+        // Update local room data
+        const room = this.app.rooms.find(r => r.id === roomId);
+        if (room) {
+          Object.assign(room, settings);
+          this.app.updateRoomsList();
+          this.app.updateRoomHeader();
+        }
+        return true;
+      } else {
+        this.app.showToast(response.error || 'Failed to update settings', 'error');
+        return false;
+      }
+    } catch (error) {
+      console.error('Update room settings error:', error);
+      this.app.showToast('Failed to update settings', 'error');
+      return false;
+    }
+  }
+
+  async deleteRoom(roomId) {
+    if (!this.isRoomAdmin(roomId) && !this.isMaster()) {
+      this.app.showToast('Permission denied', 'error');
+      return false;
+    }
+
+    try {
+      const response = await this.app.apiRequest(`/api/rooms/${roomId}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${this.app.token}` }
+      });
+
+      if (response.success) {
+        this.app.showToast('Channel deleted', 'success');
+        this.app.rooms = this.app.rooms.filter(r => r.id !== roomId);
+        this.app.updateRoomsList();
+        if (this.app.currentRoom === roomId) {
+          this.app.joinRoom('general');
+        }
+        return true;
+      } else {
+        this.app.showToast(response.error || 'Failed to delete channel', 'error');
+        return false;
+      }
+    } catch (error) {
+      console.error('Delete room error:', error);
+      this.app.showToast('Failed to delete channel', 'error');
+      return false;
+    }
+  }
+
+  async clearRoomMessages(roomId) {
+    if (!this.isRoomAdmin(roomId) && !this.isMaster()) {
+      this.app.showToast('Permission denied', 'error');
+      return false;
+    }
+
+    try {
+      const response = await this.app.apiRequest(`/api/rooms/${roomId}/messages`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${this.app.token}` }
+      });
+
+      if (response.success) {
+        this.app.showToast('All messages cleared', 'success');
+        if (this.app.currentRoom === roomId) {
+          this.app.chatElements.messages.innerHTML = '';
+          this.app.messages.set(roomId, []);
+          this.app.renderedMessageIds.clear();
+        }
+        return true;
+      } else {
+        this.app.showToast(response.error || 'Failed to clear messages', 'error');
+        return false;
+      }
+    } catch (error) {
+      console.error('Clear messages error:', error);
+      this.app.showToast('Failed to clear messages', 'error');
+      return false;
+    }
+  }
+
+  async getRoomBannedUsers(roomId) {
+    if (!this.isRoomModerator(roomId)) {
+      return [];
+    }
+
+    try {
+      const response = await this.app.apiRequest(`/api/rooms/${roomId}/banned`, {
+        method: 'GET',
+        headers: { 'Authorization': `Bearer ${this.app.token}` }
+      });
+
+      return response.users || [];
+    } catch (error) {
+      console.error('Get room banned users error:', error);
+      return [];
+    }
+  }
+
+  async banUserFromRoom(userId, roomId, reason = '') {
+    if (!this.isRoomModerator(roomId)) {
+      this.app.showToast('Permission denied', 'error');
+      return false;
+    }
+
+    try {
+      const response = await this.app.apiRequest(`/api/rooms/${roomId}/ban`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${this.app.token}` },
+        body: JSON.stringify({ userId, reason })
+      });
+
+      if (response.success) {
+        this.app.showToast('User banned from channel', 'success');
+        return true;
+      } else {
+        this.app.showToast(response.error || 'Failed to ban user', 'error');
+        return false;
+      }
+    } catch (error) {
+      console.error('Ban from room error:', error);
+      this.app.showToast('Failed to ban user', 'error');
+      return false;
+    }
+  }
+
+  async unbanUserFromRoom(userId, roomId) {
+    if (!this.isRoomModerator(roomId)) {
+      this.app.showToast('Permission denied', 'error');
+      return false;
+    }
+
+    try {
+      const response = await this.app.apiRequest(`/api/rooms/${roomId}/unban`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${this.app.token}` },
+        body: JSON.stringify({ userId })
+      });
+
+      if (response.success) {
+        this.app.showToast('User unbanned from channel', 'success');
+        return true;
+      } else {
+        this.app.showToast(response.error || 'Failed to unban user', 'error');
+        return false;
+      }
+    } catch (error) {
+      console.error('Unban from room error:', error);
+      this.app.showToast('Failed to unban user', 'error');
+      return false;
+    }
+  }
+}
+// ============================================
 // MAIN CHAT APPLICATION
 // ============================================
 class ChatApp {
@@ -284,8 +1045,10 @@ class ChatApp {
   // CONSTRUCTOR & INITIALIZATION
   // ============================================
   constructor() {
-    // Polling service
+    // Services
     this.pollingService = new PollingService(this);
+    this.avatarService = new AvatarService();
+    this.adminService = new AdminService(this);
 
     // WebSocket & Authentication
     this.ws = null;
@@ -295,7 +1058,7 @@ class ChatApp {
     
     // Reconnection
     this.reconnectAttempts = 0;
-    this.maxReconnectAttempts = 5;
+    this.maxReconnectAttempts = CONFIG.MAX_RECONNECT_ATTEMPTS;
     this.reconnectDelay = 2000;
     this.pingInterval = null;
     this.isConnecting = false;
@@ -305,7 +1068,7 @@ class ChatApp {
     this.rooms = [];
     this.messages = new Map();
     this.onlineUsers = new Map();
-    this.renderedMessageIds = new Set(); // For deduplication
+    this.renderedMessageIds = new Set();
     
     // Typing
     this.typingUsers = new Map();
@@ -317,6 +1080,7 @@ class ChatApp {
     this.attachment = null;
     this.lastMessageDate = null;
     this.emojiCategories = this.initEmojiData();
+    this.messageAlignment = localStorage.getItem('messageAlignment') || 'right';
     
     // Sidebar
     this.sidebarCollapsed = localStorage.getItem('sidebarCollapsed') === 'true';
@@ -326,7 +1090,7 @@ class ChatApp {
     this.directMessages = new Map();
     this.currentDM = null;
     this.dmConversations = [];
-    this.renderedDMIds = new Set(); // For DM deduplication
+    this.renderedDMIds = new Set();
     
     // Threads
     this.threads = new Map();
@@ -343,12 +1107,22 @@ class ChatApp {
     // Context Menu
     this.contextMenuTarget = null;
     
+    // Admin Panel
+    this.adminPanelOpen = false;
+    this.selectedUserForAdmin = null;
+    
     // Settings
     this.settings = {
       soundEnabled: true,
       desktopNotifications: false,
       compactMode: false,
-      showTimestamps: true
+      showTimestamps: true,
+      messageAlignment: 'right',
+      enterToSend: true,
+      showAvatars: true,
+      animationsEnabled: true,
+      fontSize: 'medium',
+      language: 'en'
     };
     
     // Initialize
@@ -356,7 +1130,7 @@ class ChatApp {
   }
 
   init() {
-    console.log('🚀 Initializing ChatHub with Polling & Offline Support...');
+    console.log('🚀 Initializing ChatHub Enhanced...');
     this.cacheElements();
     this.attachEventListeners();
     this.initTheme();
@@ -365,14 +1139,75 @@ class ChatApp {
     this.loadSettings();
     this.checkExistingSession();
     this.showOfflineQueueStatus();
+    this.initKeyboardShortcuts();
+    this.initAccessibility();
   }
 
-  // Show offline queue status on init
   showOfflineQueueStatus() {
     const queuedCount = this.pollingService.getQueuedCount();
     if (queuedCount > 0) {
       this.showToast(`${queuedCount} message(s) waiting to be sent`, 'info');
     }
+  }
+
+  initKeyboardShortcuts() {
+    document.addEventListener('keydown', (e) => {
+      // Ctrl/Cmd + K - Search
+      if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+        e.preventDefault();
+        this.sidebarElements.searchInput?.focus();
+      }
+      
+      // Ctrl/Cmd + Shift + A - Admin Panel (for admins/masters)
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'A') {
+        e.preventDefault();
+        if (this.adminService.isMaster() || this.user?.role === CONFIG.USER_ROLES.ADMIN) {
+          this.toggleAdminPanel();
+        }
+      }
+      
+      // Ctrl/Cmd + / - Show shortcuts
+      if ((e.ctrlKey || e.metaKey) && e.key === '/') {
+        e.preventDefault();
+        this.showShortcutsModal();
+      }
+
+      // Escape - Close panels
+      if (e.key === 'Escape') {
+        this.closeAllPanels();
+      }
+    });
+  }
+
+  initAccessibility() {
+    // Add ARIA labels
+    document.querySelectorAll('button:not([aria-label])').forEach(btn => {
+      const title = btn.getAttribute('title');
+      if (title) btn.setAttribute('aria-label', title);
+    });
+
+    // Focus management
+    this.setupFocusTrap();
+  }
+
+  setupFocusTrap() {
+    document.querySelectorAll('.modal').forEach(modal => {
+      modal.addEventListener('keydown', (e) => {
+        if (e.key === 'Tab') {
+          const focusable = modal.querySelectorAll('button, input, textarea, select, [tabindex]:not([tabindex="-1"])');
+          const first = focusable[0];
+          const last = focusable[focusable.length - 1];
+          
+          if (e.shiftKey && document.activeElement === first) {
+            e.preventDefault();
+            last?.focus();
+          } else if (!e.shiftKey && document.activeElement === last) {
+            e.preventDefault();
+            first?.focus();
+          }
+        }
+      });
+    });
   }
 
   // ============================================
@@ -419,7 +1254,8 @@ class ChatApp {
       dmList: document.getElementById('dm-list'),
       onlineCount: document.getElementById('online-count'),
       newDmBtn: document.getElementById('new-dm-btn'),
-      createRoomBtn: document.getElementById('create-room-btn')
+      createRoomBtn: document.getElementById('create-room-btn'),
+      adminPanelBtn: document.getElementById('admin-panel-btn')
     };
 
     // User Profile Elements
@@ -429,7 +1265,8 @@ class ChatApp {
       username: document.getElementById('user-username'),
       statusBtn: document.getElementById('status-btn'),
       statusDropdown: document.getElementById('status-dropdown'),
-      settingsBtn: document.getElementById('settings-btn')
+      settingsBtn: document.getElementById('settings-btn'),
+      roleBadge: document.getElementById('user-role-badge')
     };
 
     // Chat Elements
@@ -462,7 +1299,9 @@ class ChatApp {
       membersBtn: document.getElementById('members-btn'),
       membersCount: document.getElementById('room-members-count'),
       themeToggle: document.getElementById('theme-toggle'),
-      connectionStatus: document.getElementById('connection-status')
+      connectionStatus: document.getElementById('connection-status'),
+      roomSettingsBtn: document.getElementById('room-settings-btn'),
+      roomAdminBadge: document.getElementById('room-admin-badge')
     };
 
     // Mention Elements
@@ -505,6 +1344,53 @@ class ChatApp {
       emojiBtn: document.getElementById('dm-emoji-btn')
     };
 
+    // Admin Panel Elements
+    this.adminElements = {
+      panel: document.getElementById('admin-panel'),
+      closeBtn: document.getElementById('close-admin-panel'),
+      userList: document.getElementById('admin-user-list'),
+      userSearch: document.getElementById('admin-user-search'),
+      statsContainer: document.getElementById('admin-stats'),
+      bannedUsersList: document.getElementById('banned-users-list'),
+      announcementInput: document.getElementById('announcement-input'),
+      sendAnnouncementBtn: document.getElementById('send-announcement-btn'),
+      tabs: document.querySelectorAll('.admin-tab-btn'),
+      tabContents: document.querySelectorAll('.admin-tab-content')
+    };
+
+    // Room Settings Elements
+    this.roomSettingsElements = {
+      modal: document.getElementById('room-settings-modal'),
+      name: document.getElementById('room-settings-name'),
+      description: document.getElementById('room-settings-description'),
+      icon: document.getElementById('room-settings-icon'),
+      slowMode: document.getElementById('room-slow-mode'),
+      membersOnly: document.getElementById('room-members-only'),
+      moderatorsList: document.getElementById('room-moderators-list'),
+      bannedList: document.getElementById('room-banned-list'),
+      saveBtn: document.getElementById('save-room-settings'),
+      deleteBtn: document.getElementById('delete-room-btn'),
+      clearMessagesBtn: document.getElementById('clear-room-messages-btn')
+    };
+
+    // User Management Modal Elements
+    this.userManageElements = {
+      modal: document.getElementById('user-manage-modal'),
+      avatar: document.getElementById('manage-user-avatar'),
+      name: document.getElementById('manage-user-name'),
+      username: document.getElementById('manage-user-username'),
+      role: document.getElementById('manage-user-role'),
+      roleSelect: document.getElementById('manage-role-select'),
+      banBtn: document.getElementById('manage-ban-btn'),
+      kickBtn: document.getElementById('manage-kick-btn'),
+      muteBtn: document.getElementById('manage-mute-btn'),
+      deleteBtn: document.getElementById('manage-delete-btn'),
+      messageBtn: document.getElementById('manage-message-btn'),
+      banReason: document.getElementById('ban-reason-input'),
+      banDuration: document.getElementById('ban-duration-select'),
+      muteDuration: document.getElementById('mute-duration-select')
+    };
+
     // Modal Elements
     this.modals = {
       settings: document.getElementById('settings-modal'),
@@ -512,13 +1398,19 @@ class ChatApp {
       newDM: document.getElementById('new-dm-modal'),
       userProfile: document.getElementById('user-profile-modal'),
       image: document.getElementById('image-modal'),
-      confirm: document.getElementById('confirm-modal')
+      confirm: document.getElementById('confirm-modal'),
+      roomSettings: document.getElementById('room-settings-modal'),
+      userManage: document.getElementById('user-manage-modal'),
+      shortcuts: document.getElementById('shortcuts-modal'),
+      announcement: document.getElementById('announcement-modal')
     };
 
     // Settings Modal Elements
     this.settingsModalElements = {
       avatar: document.getElementById('settings-avatar'),
       avatarInput: document.getElementById('avatar-input'),
+      avatarPreview: document.getElementById('avatar-preview'),
+      avatarError: document.getElementById('avatar-error'),
       displayName: document.getElementById('settings-displayname'),
       bio: document.getElementById('settings-bio'),
       bioCharCount: document.getElementById('bio-char-count'),
@@ -532,6 +1424,10 @@ class ChatApp {
       soundToggle: document.getElementById('sound-toggle'),
       desktopNotificationsToggle: document.getElementById('desktop-notifications-toggle'),
       previewToggle: document.getElementById('preview-toggle'),
+      messageAlignmentSelect: document.getElementById('message-alignment-select'),
+      enterToSendToggle: document.getElementById('enter-to-send-toggle'),
+      showAvatarsToggle: document.getElementById('show-avatars-toggle'),
+      animationsToggle: document.getElementById('animations-toggle'),
       saveBtn: document.getElementById('save-settings'),
       logoutBtn: document.getElementById('logout-btn')
     };
@@ -552,6 +1448,14 @@ class ChatApp {
       recentList: document.getElementById('dm-recent-list')
     };
 
+    // Confirm Modal Elements
+    this.confirmModalElements = {
+      title: document.getElementById('confirm-modal-title'),
+      message: document.getElementById('confirm-modal-message'),
+      confirmBtn: document.getElementById('confirm-modal-confirm'),
+      cancelBtn: document.getElementById('confirm-modal-cancel')
+    };
+
     // Context Menu
     this.contextMenu = document.getElementById('context-menu');
 
@@ -561,7 +1465,8 @@ class ChatApp {
     // Audio Elements
     this.sounds = {
       notification: document.getElementById('notification-sound'),
-      mention: document.getElementById('mention-sound')
+      mention: document.getElementById('mention-sound'),
+      sent: document.getElementById('sent-sound')
     };
   }
 
@@ -634,6 +1539,10 @@ class ChatApp {
       this.closeMobileSidebar();
     });
 
+    this.sidebarElements.adminPanelBtn?.addEventListener('click', () => {
+      this.toggleAdminPanel();
+    });
+
     // ===== USER PROFILE EVENTS =====
     this.userProfileElements.statusBtn?.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -666,6 +1575,13 @@ class ChatApp {
       this.createRoom();
     });
 
+    // Room settings button
+    this.headerElements.roomSettingsBtn?.addEventListener('click', () => {
+      if (this.adminService.isRoomAdmin(this.currentRoom) || this.adminService.isMaster()) {
+        this.openRoomSettings();
+      }
+    });
+
     // Icon suggestions
     document.querySelectorAll('.icon-suggestion').forEach(btn => {
       btn.addEventListener('click', () => {
@@ -690,7 +1606,7 @@ class ChatApp {
     });
 
     this.dmElements.input?.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && !e.shiftKey) {
+      if (e.key === 'Enter' && !e.shiftKey && this.settings.enterToSend) {
         e.preventDefault();
         this.sendDMMessage();
       }
@@ -733,8 +1649,8 @@ class ChatApp {
         }
       }
 
-      // Send message on Enter
-      if (e.key === 'Enter' && !e.shiftKey) {
+      // Send message on Enter (if enabled)
+      if (e.key === 'Enter' && !e.shiftKey && this.settings.enterToSend) {
         e.preventDefault();
         this.sendMessage();
       }
@@ -757,6 +1673,11 @@ class ChatApp {
 
     this.chatElements.cancelAttachment?.addEventListener('click', () => {
       this.clearAttachment();
+    });
+
+    // ===== AVATAR UPLOAD =====
+    this.settingsModalElements.avatarInput?.addEventListener('change', (e) => {
+      this.handleAvatarSelect(e);
     });
 
     // ===== REPLY EVENTS =====
@@ -810,10 +1731,63 @@ class ChatApp {
     });
 
     this.threadElements.input?.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && !e.shiftKey) {
+      if (e.key === 'Enter' && !e.shiftKey && this.settings.enterToSend) {
         e.preventDefault();
         this.sendThreadReply();
       }
+    });
+
+    // ===== ADMIN PANEL EVENTS =====
+    this.adminElements.closeBtn?.addEventListener('click', () => {
+      this.closeAdminPanel();
+    });
+
+    this.adminElements.userSearch?.addEventListener('input', this.debounce((e) => {
+      this.searchUsersAdmin(e.target.value);
+    }, 300));
+
+    this.adminElements.sendAnnouncementBtn?.addEventListener('click', () => {
+      this.sendAnnouncement();
+    });
+
+    this.adminElements.tabs?.forEach(tab => {
+      tab.addEventListener('click', () => {
+        this.switchAdminTab(tab.dataset.tab);
+      });
+    });
+
+    // ===== ROOM SETTINGS EVENTS =====
+    this.roomSettingsElements.saveBtn?.addEventListener('click', () => {
+      this.saveRoomSettings();
+    });
+
+    this.roomSettingsElements.deleteBtn?.addEventListener('click', () => {
+      this.confirmDeleteRoom();
+    });
+
+    this.roomSettingsElements.clearMessagesBtn?.addEventListener('click', () => {
+      this.confirmClearRoomMessages();
+    });
+
+    // ===== USER MANAGEMENT EVENTS =====
+    this.userManageElements.banBtn?.addEventListener('click', () => {
+      this.banSelectedUser();
+    });
+
+    this.userManageElements.kickBtn?.addEventListener('click', () => {
+      this.kickSelectedUser();
+    });
+
+    this.userManageElements.muteBtn?.addEventListener('click', () => {
+      this.muteSelectedUser();
+    });
+
+    this.userManageElements.deleteBtn?.addEventListener('click', () => {
+      this.deleteSelectedUser();
+    });
+
+    this.userManageElements.roleSelect?.addEventListener('change', (e) => {
+      this.changeSelectedUserRole(e.target.value);
     });
 
     // ===== SETTINGS MODAL EVENTS =====
@@ -829,15 +1803,16 @@ class ChatApp {
       this.settingsModalElements.avatarInput?.click();
     });
 
-    this.settingsModalElements.avatarInput?.addEventListener('change', (e) => {
-      this.uploadAvatar(e);
-    });
-
     this.settingsModalElements.bio?.addEventListener('input', (e) => {
       const count = e.target.value.length;
       if (this.settingsModalElements.bioCharCount) {
         this.settingsModalElements.bioCharCount.textContent = count;
       }
+    });
+
+    this.settingsModalElements.messageAlignmentSelect?.addEventListener('change', (e) => {
+      this.settings.messageAlignment = e.target.value;
+      this.applyMessageAlignment();
     });
 
     // Settings tabs
@@ -881,6 +1856,10 @@ class ChatApp {
     // ===== USER PROFILE MODAL =====
     document.getElementById('send-dm-btn')?.addEventListener('click', () => {
       this.sendDMFromProfile();
+    });
+
+    document.getElementById('manage-user-btn')?.addEventListener('click', () => {
+      this.openUserManagement();
     });
 
     // ===== CONTEXT MENU =====
@@ -935,6 +1914,7 @@ class ChatApp {
         this.closePinnedPanel();
         this.closeDMChat();
         this.hideContextMenu();
+        this.closeAdminPanel();
       }
     });
 
@@ -946,13 +1926,10 @@ class ChatApp {
     // Handle visibility change (for reconnection)
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'visible' && this.user) {
-        // Try to reconnect WebSocket if not connected
         if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
           this.connectWebSocket();
         }
-        // Also do a poll to catch up
         this.pollingService.poll();
-        // Try to sync any offline messages
         this.pollingService.syncOfflineMessages();
       }
     });
@@ -977,6 +1954,25 @@ class ChatApp {
       this.updateConnectionStatus('offline');
       this.showToast('You are offline - messages will queue', 'warning');
     });
+
+    // Drag and drop file upload
+    this.chatElements.messagesContainer?.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      e.currentTarget.classList.add('drag-over');
+    });
+
+    this.chatElements.messagesContainer?.addEventListener('dragleave', (e) => {
+      e.currentTarget.classList.remove('drag-over');
+    });
+
+    this.chatElements.messagesContainer?.addEventListener('drop', (e) => {
+      e.preventDefault();
+      e.currentTarget.classList.remove('drag-over');
+      const files = e.dataTransfer.files;
+      if (files.length > 0) {
+        this.handleFileUpload(files[0]);
+      }
+    });
   }
 
   // ============================================
@@ -996,6 +1992,10 @@ class ChatApp {
     };
     
     indicator.title = titles[status] || 'Unknown';
+
+    // Update body class for global styling
+    document.body.classList.remove('status-online', 'status-polling', 'status-connecting', 'status-offline');
+    document.body.classList.add(`status-${status}`);
   }
 
   // ============================================
@@ -1009,7 +2009,6 @@ class ChatApp {
       return;
     }
 
-    // If offline, try to restore session from localStorage
     if (!navigator.onLine) {
       const cachedUser = localStorage.getItem('cachedUser');
       if (cachedUser) {
@@ -1039,7 +2038,6 @@ class ChatApp {
       if (response.success) {
         this.token = token;
         this.user = response.user;
-        // Cache user for offline access
         localStorage.setItem('cachedUser', JSON.stringify(response.user));
         this.connectWebSocket();
       } else {
@@ -1048,7 +2046,6 @@ class ChatApp {
       }
     } catch (error) {
       console.error('Session verification failed:', error);
-      // Try offline mode with cached data
       const cachedUser = localStorage.getItem('cachedUser');
       if (cachedUser) {
         try {
@@ -1101,10 +2098,15 @@ class ChatApp {
           sessionStorage.setItem('chatToken', response.token);
         }
 
-        // Cache user for offline access
         localStorage.setItem('cachedUser', JSON.stringify(response.user));
-
         this.connectWebSocket();
+
+        // Show welcome message for admins/masters
+        if (this.user.role === CONFIG.USER_ROLES.MASTER) {
+          this.showToast('Welcome back, Master!', 'success');
+        } else if (this.user.role === CONFIG.USER_ROLES.ADMIN) {
+          this.showToast('Welcome back, Admin!', 'success');
+        }
       } else {
         this.showAuthError('login', response.error || 'Login failed');
       }
@@ -1171,7 +2173,6 @@ class ChatApp {
         this.token = response.token;
         this.user = response.user;
         sessionStorage.setItem('chatToken', response.token);
-        // Cache user for offline access
         localStorage.setItem('cachedUser', JSON.stringify(response.user));
         this.connectWebSocket();
         this.showToast('Account created successfully!', 'success');
@@ -1209,9 +2210,12 @@ class ChatApp {
 
   updatePasswordStrength(password) {
     const strengthBar = document.querySelector('.strength-bar');
+    const strengthText = document.querySelector('.strength-text');
     if (!strengthBar) return;
 
     let strength = 0;
+    let label = 'Weak';
+
     if (password.length >= 6) strength++;
     if (password.length >= 10) strength++;
     if (/[A-Z]/.test(password)) strength++;
@@ -1222,9 +2226,20 @@ class ChatApp {
     strengthBar.style.width = `${percentage}%`;
 
     strengthBar.className = 'strength-bar';
-    if (strength <= 2) strengthBar.classList.add('weak');
-    else if (strength <= 3) strengthBar.classList.add('medium');
-    else strengthBar.classList.add('strong');
+    if (strength <= 2) {
+      strengthBar.classList.add('weak');
+      label = 'Weak';
+    } else if (strength <= 3) {
+      strengthBar.classList.add('medium');
+      label = 'Medium';
+    } else {
+      strengthBar.classList.add('strong');
+      label = 'Strong';
+    }
+
+    if (strengthText) {
+      strengthText.textContent = label;
+    }
   }
 
   async logout() {
@@ -1243,6 +2258,7 @@ class ChatApp {
     this.pollingService.clearQueue();
     this.clearSession();
     this.closeAllModals();
+    this.closeAdminPanel();
     this.showScreen('auth');
     this.showToast('Logged out successfully', 'info');
   }
@@ -1308,10 +2324,7 @@ class ChatApp {
       this.authenticate();
       this.startPing();
       
-      // Stop polling when WS is connected
       this.pollingService.stop();
-      
-      // Sync any offline messages
       this.pollingService.syncOfflineMessages();
     };
 
@@ -1352,7 +2365,6 @@ class ChatApp {
     this.showToast('Using polling mode for messages', 'info');
     this.pollingService.start();
     
-    // If we're already showing chat, do an immediate poll
     if (this.screens.chat?.classList.contains('active')) {
       this.pollingService.poll();
     }
@@ -1375,7 +2387,7 @@ class ChatApp {
     this.stopPing();
     this.pingInterval = setInterval(() => {
       this.wsSend({ type: 'ping' });
-    }, 30000);
+    }, CONFIG.PING_INTERVAL);
   }
 
   stopPing() {
@@ -1396,7 +2408,6 @@ class ChatApp {
         this.user = data.user;
         this.rooms = data.rooms || [];
         this.onlineUsers = new Map((data.onlineUsers || []).map(u => [u.id, u]));
-        // Cache user and rooms for offline access
         localStorage.setItem('cachedUser', JSON.stringify(data.user));
         localStorage.setItem('cachedRooms', JSON.stringify(data.rooms));
         this.showScreen('chat');
@@ -1450,6 +2461,10 @@ class ChatApp {
         this.handleRoomCreated(data.room);
         break;
 
+      case 'room_deleted':
+        this.handleRoomDeleted(data.roomId);
+        break;
+
       case 'dm_received':
         this.handleDMReceived(data);
         break;
@@ -1466,8 +2481,27 @@ class ChatApp {
         this.handleMessageUnpinned(data);
         break;
 
+      case 'user_banned':
+        this.handleUserBanned(data);
+        break;
+
+      case 'user_kicked':
+        this.handleUserKicked(data);
+        break;
+
+      case 'user_muted':
+        this.handleUserMuted(data);
+        break;
+
+      case 'announcement':
+        this.handleAnnouncement(data);
+        break;
+
+      case 'role_changed':
+        this.handleRoleChanged(data);
+        break;
+
       case 'pong':
-        // Keep-alive response
         break;
 
       case 'error':
@@ -1479,14 +2513,97 @@ class ChatApp {
     }
   }
 
+  // Handle admin-related WebSocket messages
+  handleUserBanned(data) {
+    if (data.userId === this.user?.id) {
+      this.showToast('You have been banned: ' + (data.reason || 'No reason provided'), 'error');
+      this.logout();
+    } else {
+      this.onlineUsers.delete(data.userId);
+      this.updateUsersList();
+      if (this.adminService.isMaster() || this.user?.role === CONFIG.USER_ROLES.ADMIN) {
+        this.showToast(`${data.username} has been banned`, 'info');
+      }
+    }
+  }
+
+  handleUserKicked(data) {
+    if (data.userId === this.user?.id && data.roomId === this.currentRoom) {
+      this.showToast('You have been kicked from this channel', 'warning');
+      this.joinRoom('general');
+    }
+  }
+
+  handleUserMuted(data) {
+    if (data.userId === this.user?.id && data.roomId === this.currentRoom) {
+      this.showToast(`You have been muted for ${data.duration} minutes`, 'warning');
+    }
+  }
+
+  handleAnnouncement(data) {
+    this.showAnnouncementNotification(data.message, data.from);
+  }
+
+  handleRoleChanged(data) {
+    if (data.userId === this.user?.id) {
+      this.user.role = data.role;
+      localStorage.setItem('cachedUser', JSON.stringify(this.user));
+      this.updateUI();
+      this.showToast(`Your role has been changed to ${data.role}`, 'info');
+    }
+    
+    const user = this.onlineUsers.get(data.userId);
+    if (user) {
+      user.role = data.role;
+      this.updateUsersList();
+    }
+  }
+
+  handleRoomDeleted(roomId) {
+    this.rooms = this.rooms.filter(r => r.id !== roomId);
+    this.updateRoomsList();
+    
+    if (this.currentRoom === roomId) {
+      this.showToast('This channel has been deleted', 'warning');
+      this.joinRoom('general');
+    }
+  }
+
+  showAnnouncementNotification(message, from) {
+    // Create special announcement toast
+    const container = this.toastContainer;
+    if (!container) return;
+
+    const toast = document.createElement('div');
+    toast.className = 'toast announcement';
+    toast.innerHTML = `
+      <div class="announcement-header">
+        <i class="fas fa-bullhorn"></i>
+        <span>Announcement${from ? ` from ${this.escapeHtml(from)}` : ''}</span>
+      </div>
+      <div class="announcement-body">${this.escapeHtml(message)}</div>
+    `;
+
+    container.appendChild(toast);
+
+    requestAnimationFrame(() => {
+      toast.classList.add('show');
+    });
+
+    // Play announcement sound
+    this.playSound('mention');
+
+    setTimeout(() => {
+      toast.classList.remove('show');
+      setTimeout(() => toast.remove(), 300);
+    }, 10000);
+  }
   // ============================================
   // ROOM MANAGEMENT
   // ============================================
   joinRoom(roomId) {
-    // Clear rendered messages for new room
     this.renderedMessageIds.clear();
     
-    // Try WebSocket first, fall back to HTTP
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       this.wsSend({
         type: 'join_room',
@@ -1495,7 +2612,6 @@ class ChatApp {
     } else if (navigator.onLine) {
       this.joinRoomViaHTTP(roomId);
     } else {
-      // Offline - load cached messages
       this.loadCachedRoomMessages(roomId);
     }
   }
@@ -1512,14 +2628,13 @@ class ChatApp {
           roomId,
           messages: response.messages,
           lastMessageId: response.lastMessageId,
-          pinnedMessages: []
+          pinnedMessages: [],
+          roomInfo: response.roomInfo
         });
-        // Cache messages for offline access
         localStorage.setItem(`cachedMessages_${roomId}`, JSON.stringify(response.messages));
       }
     } catch (error) {
       console.error('Join room via HTTP failed:', error);
-      // Try loading cached messages
       this.loadCachedRoomMessages(roomId);
     }
   }
@@ -1550,23 +2665,18 @@ class ChatApp {
   handleRoomJoined(data) {
     this.currentRoom = data.roomId;
     
-    // Clear messages container
     if (this.chatElements.messages) {
       this.chatElements.messages.innerHTML = '';
     }
     this.lastMessageDate = null;
     this.renderedMessageIds.clear();
 
-    // Store messages
     this.messages.set(this.currentRoom, data.messages || []);
-
-    // Update polling service with last message ID
     this.pollingService.setRoom(this.currentRoom, data.lastMessageId);
 
     if (data.messages && data.messages.length > 0) {
       this.chatElements.welcomeMessage?.classList.add('hidden');
       data.messages.forEach(msg => this.renderMessage(msg, false));
-      // Cache messages for offline access
       localStorage.setItem(`cachedMessages_${this.currentRoom}`, JSON.stringify(data.messages));
     } else {
       this.chatElements.welcomeMessage?.classList.remove('hidden');
@@ -1579,15 +2689,38 @@ class ChatApp {
     this.scrollToBottom();
     this.updateRoomsList();
     this.updateRoomHeader();
+    this.updateRoomAdminUI();
 
     this.pinnedMessages = data.pinnedMessages || [];
+  }
+
+  updateRoomAdminUI() {
+    const isAdmin = this.adminService.isRoomAdmin(this.currentRoom);
+    const isMod = this.adminService.isRoomModerator(this.currentRoom);
+    
+    // Show/hide room settings button
+    if (this.headerElements.roomSettingsBtn) {
+      this.headerElements.roomSettingsBtn.style.display = isAdmin ? 'flex' : 'none';
+    }
+    
+    // Show admin badge
+    if (this.headerElements.roomAdminBadge) {
+      if (isAdmin) {
+        this.headerElements.roomAdminBadge.textContent = 'Admin';
+        this.headerElements.roomAdminBadge.style.display = 'inline-block';
+      } else if (isMod) {
+        this.headerElements.roomAdminBadge.textContent = 'Mod';
+        this.headerElements.roomAdminBadge.style.display = 'inline-block';
+      } else {
+        this.headerElements.roomAdminBadge.style.display = 'none';
+      }
+    }
   }
 
   updateRoomsList() {
     const container = this.sidebarElements.roomsList;
     if (!container) return;
 
-    // If offline and no rooms, try to load from cache
     if (this.rooms.length === 0) {
       const cachedRooms = localStorage.getItem('cachedRooms');
       if (cachedRooms) {
@@ -1602,12 +2735,16 @@ class ChatApp {
     container.innerHTML = '';
 
     this.rooms.forEach(room => {
+      const isAdmin = this.adminService.isRoomAdmin(room.id);
       const roomEl = document.createElement('div');
       roomEl.className = `room-item ${room.id === this.currentRoom ? 'active' : ''}`;
       roomEl.setAttribute('data-tooltip', room.name);
+      roomEl.setAttribute('data-room-id', room.id);
       roomEl.innerHTML = `
         <span class="room-icon">${room.icon || '💬'}</span>
         <span class="room-name">${this.escapeHtml(room.name)}</span>
+        ${isAdmin ? '<span class="room-admin-indicator"><i class="fas fa-crown"></i></span>' : ''}
+        ${room.isPrivate ? '<span class="room-private-indicator"><i class="fas fa-lock"></i></span>' : ''}
       `;
 
       roomEl.addEventListener('click', () => {
@@ -1617,8 +2754,75 @@ class ChatApp {
         }
       });
 
+      // Right-click context menu for rooms
+      roomEl.addEventListener('contextmenu', (e) => {
+        if (isAdmin || this.adminService.isMaster()) {
+          e.preventDefault();
+          this.showRoomContextMenu(e, room);
+        }
+      });
+
       container.appendChild(roomEl);
     });
+  }
+
+  showRoomContextMenu(event, room) {
+    // Create room context menu
+    let menu = document.getElementById('room-context-menu');
+    if (!menu) {
+      menu = document.createElement('div');
+      menu.id = 'room-context-menu';
+      menu.className = 'context-menu';
+      document.body.appendChild(menu);
+    }
+
+    menu.innerHTML = `
+      <div class="context-menu-item" data-action="room-settings">
+        <i class="fas fa-cog"></i> Settings
+      </div>
+      <div class="context-menu-item" data-action="room-clear">
+        <i class="fas fa-broom"></i> Clear Messages
+      </div>
+      <div class="context-menu-divider"></div>
+      <div class="context-menu-item danger" data-action="room-delete">
+        <i class="fas fa-trash"></i> Delete Channel
+      </div>
+    `;
+
+    menu.style.left = `${event.pageX}px`;
+    menu.style.top = `${event.pageY}px`;
+    menu.classList.add('active');
+
+    const handleAction = (e) => {
+      const action = e.target.closest('.context-menu-item')?.dataset.action;
+      if (!action) return;
+
+      switch (action) {
+        case 'room-settings':
+          this.openRoomSettings(room.id);
+          break;
+        case 'room-clear':
+          this.confirmClearRoomMessages(room.id);
+          break;
+        case 'room-delete':
+          this.confirmDeleteRoom(room.id);
+          break;
+      }
+
+      menu.classList.remove('active');
+      menu.removeEventListener('click', handleAction);
+    };
+
+    menu.addEventListener('click', handleAction);
+
+    // Close on outside click
+    const closeMenu = (e) => {
+      if (!menu.contains(e.target)) {
+        menu.classList.remove('active');
+        document.removeEventListener('click', closeMenu);
+      }
+    };
+    setTimeout(() => document.addEventListener('click', closeMenu), 0);
   }
 
   updateRoomHeader() {
@@ -1683,7 +2887,6 @@ class ChatApp {
   }
 
   handleRoomCreated(room) {
-    // Check if room already exists
     if (!this.rooms.find(r => r.id === room.id)) {
       this.rooms.push(room);
       localStorage.setItem('cachedRooms', JSON.stringify(this.rooms));
@@ -1692,15 +2895,155 @@ class ChatApp {
     }
   }
 
+  // Room Settings
+  openRoomSettings(roomId = this.currentRoom) {
+    const room = this.rooms.find(r => r.id === roomId);
+    if (!room) return;
+
+    if (this.roomSettingsElements.name) {
+      this.roomSettingsElements.name.value = room.name;
+    }
+    if (this.roomSettingsElements.description) {
+      this.roomSettingsElements.description.value = room.description || '';
+    }
+    if (this.roomSettingsElements.icon) {
+      this.roomSettingsElements.icon.value = room.icon || '💬';
+    }
+    if (this.roomSettingsElements.slowMode) {
+      this.roomSettingsElements.slowMode.value = room.slowMode || '0';
+    }
+    if (this.roomSettingsElements.membersOnly) {
+      this.roomSettingsElements.membersOnly.checked = room.membersOnly || false;
+    }
+
+    // Load moderators list
+    this.loadRoomModerators(roomId);
+    
+    // Load banned users
+    this.loadRoomBannedUsers(roomId);
+
+    this.openModal('roomSettings');
+  }
+
+  async loadRoomModerators(roomId) {
+    const container = this.roomSettingsElements.moderatorsList;
+    if (!container) return;
+
+    const room = this.rooms.find(r => r.id === roomId);
+    const moderatorIds = room?.moderatorIds || [];
+
+    if (moderatorIds.length === 0) {
+      container.innerHTML = '<p class="empty-text">No moderators</p>';
+      return;
+    }
+
+    container.innerHTML = moderatorIds.map(id => {
+      const user = this.onlineUsers.get(id);
+      if (!user) return '';
+      return `
+        <div class="moderator-item" data-user-id="${id}">
+          <img src="${user.avatar || this.avatarService.generateDefault(user.username)}" alt="">
+          <span>${this.escapeHtml(user.displayName || user.username)}</span>
+          <button class="btn-icon-tiny remove-mod-btn" title="Remove Moderator">
+            <i class="fas fa-times"></i>
+          </button>
+        </div>
+      `;
+    }).join('');
+
+    container.querySelectorAll('.remove-mod-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        const userId = e.target.closest('.moderator-item').dataset.userId;
+        this.adminService.removeRoomModerator(userId, roomId);
+      });
+    });
+  }
+
+  async loadRoomBannedUsers(roomId) {
+    const container = this.roomSettingsElements.bannedList;
+    if (!container) return;
+
+    const bannedUsers = await this.adminService.getRoomBannedUsers(roomId);
+
+    if (bannedUsers.length === 0) {
+      container.innerHTML = '<p class="empty-text">No banned users</p>';
+      return;
+    }
+
+    container.innerHTML = bannedUsers.map(user => `
+      <div class="banned-item" data-user-id="${user.id}">
+        <img src="${user.avatar || this.avatarService.generateDefault(user.username)}" alt="">
+        <div class="banned-info">
+          <span class="banned-name">${this.escapeHtml(user.displayName || user.username)}</span>
+          <span class="banned-reason">${user.reason ? this.escapeHtml(user.reason) : 'No reason'}</span>
+        </div>
+        <button class="btn-icon-tiny unban-btn" title="Unban User">
+          <i class="fas fa-user-check"></i>
+        </button>
+      </div>
+    `).join('');
+
+    container.querySelectorAll('.unban-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        const userId = e.target.closest('.banned-item').dataset.userId;
+        this.adminService.unbanUserFromRoom(userId, roomId);
+      });
+    });
+  }
+
+  async saveRoomSettings() {
+    const roomId = this.currentRoom;
+    const settings = {
+      name: this.roomSettingsElements.name?.value.trim(),
+      description: this.roomSettingsElements.description?.value.trim(),
+      icon: this.roomSettingsElements.icon?.value.trim() || '💬',
+      slowMode: parseInt(this.roomSettingsElements.slowMode?.value) || 0,
+      membersOnly: this.roomSettingsElements.membersOnly?.checked || false
+    };
+
+    if (!settings.name || settings.name.length < 2) {
+      this.showToast('Channel name must be at least 2 characters', 'error');
+      return;
+    }
+
+    const success = await this.adminService.updateRoomSettings(roomId, settings);
+    if (success) {
+      this.closeAllModals();
+    }
+  }
+
+  confirmDeleteRoom(roomId = this.currentRoom) {
+    this.showConfirmModal(
+      'Delete Channel',
+      'Are you sure you want to delete this channel? This action cannot be undone.',
+      async () => {
+        await this.adminService.deleteRoom(roomId);
+      },
+      'Delete',
+      'danger'
+    );
+  }
+
+  confirmClearRoomMessages(roomId = this.currentRoom) {
+    this.showConfirmModal(
+      'Clear Messages',
+      'Are you sure you want to delete all messages in this channel? This action cannot be undone.',
+      async () => {
+        await this.adminService.clearRoomMessages(roomId);
+      },
+      'Clear All',
+      'warning'
+    );
+  }
+
   // ============================================
-  // MESSAGING (WITH OFFLINE SUPPORT)
+  // MESSAGING (WITH OFFLINE SUPPORT & RIGHT ALIGNMENT)
   // ============================================
   async sendMessage() {
     const text = this.chatElements.messageInput?.value.trim();
 
     if (!text && !this.attachment) return;
 
-    // Clear input immediately for better UX
     if (this.chatElements.messageInput) {
       this.chatElements.messageInput.value = '';
       this.autoResizeTextarea(this.chatElements.messageInput);
@@ -1716,9 +3059,7 @@ class ChatApp {
     this.clearAttachment();
     this.sendTypingStatus(false);
 
-    // Check if online
     if (!navigator.onLine) {
-      // Queue for later
       const queued = this.pollingService.queueOfflineMessage({
         type: 'message',
         roomId: this.currentRoom,
@@ -1728,13 +3069,11 @@ class ChatApp {
         isDM: false
       });
       
-      // Show message immediately with "pending" indicator
       this.showPendingMessage(queued);
       this.showToast('Message queued - will send when online', 'info');
       return;
     }
 
-    // Try WebSocket first
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       this.wsSend({
         type: 'message',
@@ -1743,8 +3082,8 @@ class ChatApp {
         attachment: messageData.attachment,
         replyTo: messageData.replyTo
       });
+      this.playSound('sent');
     } else {
-      // Fall back to HTTP
       await this.sendMessageViaHTTP(messageData);
     }
   }
@@ -1764,13 +3103,13 @@ class ChatApp {
       if (response.success) {
         this.handleNewMessage(response.message);
         this.pollingService.lastRoomMessageId = response.message.id;
+        this.playSound('sent');
       } else {
         throw new Error(response.error || 'Failed to send');
       }
     } catch (error) {
       console.error('Send message error:', error);
       
-      // Queue message if send failed
       const queued = this.pollingService.queueOfflineMessage({
         type: 'message',
         roomId: this.currentRoom,
@@ -1785,7 +3124,6 @@ class ChatApp {
     }
   }
 
-  // Sync message to server (called by PollingService)
   async syncMessageToServer(message) {
     const response = await this.apiRequest(`/api/messages/${message.roomId}`, {
       method: 'POST',
@@ -1804,7 +3142,6 @@ class ChatApp {
     return response.message;
   }
 
-  // Show pending message in UI
   showPendingMessage(message) {
     const pendingMessage = {
       id: message.id,
@@ -1824,46 +3161,42 @@ class ChatApp {
     this.handleNewMessage(pendingMessage);
   }
 
-  // Mark message as sent (remove pending indicator)
   markMessageAsSent(tempId) {
     const messageEl = document.querySelector(`[data-message-id="${tempId}"]`);
     if (messageEl) {
       messageEl.classList.remove('pending');
+      const pendingIndicator = messageEl.querySelector('.pending-indicator');
+      if (pendingIndicator) {
+        pendingIndicator.innerHTML = '<i class="fas fa-check"></i> Sent';
+        setTimeout(() => pendingIndicator.remove(), 2000);
+      }
     }
   }
 
   handleNewMessage(message) {
     if (message.roomId !== this.currentRoom) return;
 
-    // Deduplication check
     if (this.renderedMessageIds.has(message.id)) {
       console.log('[Dedup] Message already rendered:', message.id);
       return;
     }
 
-    // Store message
     const roomMessages = this.messages.get(this.currentRoom) || [];
     if (!roomMessages.find(m => m.id === message.id)) {
       roomMessages.push(message);
       this.messages.set(this.currentRoom, roomMessages);
-      // Update cache
-      localStorage.setItem(`cachedMessages_${this.currentRoom}`, JSON.stringify(roomMessages.slice(-100)));
+      localStorage.setItem(`cachedMessages_${this.currentRoom}`, JSON.stringify(roomMessages.slice(-CONFIG.MESSAGE_CACHE_LIMIT)));
     }
 
-    // Update polling last message ID (only for non-pending messages)
     if (!message.pending) {
       this.pollingService.lastRoomMessageId = message.id;
     }
 
-    // Hide welcome message
     this.chatElements.welcomeMessage?.classList.add('hidden');
-
-    // Render message
     this.renderMessage(message, true);
 
-    // Play notification if not own message
     if (message.userId !== this.user?.id && !message.pending) {
-      this.playNotificationSound();
+      this.playSound('notification');
       this.showDesktopNotification(message);
     }
   }
@@ -1872,7 +3205,6 @@ class ChatApp {
     const container = this.chatElements.messages;
     if (!container) return;
 
-    // Deduplication check
     if (this.renderedMessageIds.has(message.id)) {
       return;
     }
@@ -1885,18 +3217,23 @@ class ChatApp {
       this.lastMessageDate = messageDate;
     }
 
+    const isOwn = message.userId === this.user?.id;
     const messageEl = document.createElement('div');
-    messageEl.className = `message ${message.pending ? 'pending' : ''}`;
+    
+    // Apply alignment class based on settings
+    const alignmentClass = this.settings.messageAlignment === 'right' && isOwn ? 'aligned-right' : '';
+    
+    messageEl.className = `message ${message.pending ? 'pending' : ''} ${isOwn ? 'own' : ''} ${alignmentClass}`;
     messageEl.dataset.messageId = message.id;
     messageEl.dataset.userId = message.userId;
 
-    if (message.userId === this.user?.id) {
-      messageEl.classList.add('own');
-    }
-
-    const avatar = message.avatar || this.generateDefaultAvatar(message.username);
+    const avatar = message.avatar || this.avatarService.generateDefault(message.username);
     const time = this.formatTime(message.createdAt);
     const displayName = message.displayName || message.username;
+
+    // User role badge
+    const userRole = this.getUserRole(message.userId);
+    const roleBadgeHtml = this.getRoleBadgeHtml(userRole);
 
     // Reply HTML
     let replyHtml = '';
@@ -1923,6 +3260,22 @@ class ChatApp {
                  onclick="app.openImageModal('${message.attachment.url}')" loading="lazy">
           </div>
         `;
+      } else if (message.attachment.type?.startsWith('video/')) {
+        attachmentHtml = `
+          <div class="message-attachment video">
+            <video controls preload="metadata">
+              <source src="${message.attachment.url}" type="${message.attachment.type}">
+            </video>
+          </div>
+        `;
+      } else if (message.attachment.type?.startsWith('audio/')) {
+        attachmentHtml = `
+          <div class="message-attachment audio">
+            <audio controls preload="metadata">
+              <source src="${message.attachment.url}" type="${message.attachment.type}">
+            </audio>
+          </div>
+        `;
       } else {
         const fileIcon = this.getFileIcon(message.attachment.type);
         attachmentHtml = `
@@ -1932,6 +3285,9 @@ class ChatApp {
               <a href="${message.attachment.url}" target="_blank" rel="noopener">${this.escapeHtml(message.attachment.name)}</a>
               <span class="file-size">${this.formatFileSize(message.attachment.size)}</span>
             </div>
+            <a href="${message.attachment.url}" download class="download-btn" title="Download">
+              <i class="fas fa-download"></i>
+            </a>
           </div>
         `;
       }
@@ -1956,13 +3312,32 @@ class ChatApp {
       </div>
     ` : '';
 
-    messageEl.innerHTML = `
+    // Admin actions (for moderators/admins viewing other users' messages)
+    const canModerate = this.adminService.isRoomModerator(this.currentRoom) && !isOwn;
+    const adminActionsHtml = canModerate ? `
+      <button class="btn-icon-tiny admin-action" onclick="app.openUserManagement('${message.userId}')" title="Manage User">
+        <i class="fas fa-user-shield"></i>
+      </button>
+      <button class="btn-icon-tiny admin-action" onclick="app.adminDeleteMessage('${message.id}')" title="Delete (Mod)">
+        <i class="fas fa-trash-alt"></i>
+      </button>
+    ` : '';
+
+    // Show avatars based on settings
+    const avatarHtml = this.settings.showAvatars ? `
       <img class="message-avatar" src="${avatar}" alt="" 
            onclick="app.openUserProfile('${message.userId}')" loading="lazy">
+    ` : '';
+
+    messageEl.innerHTML = `
+      ${avatarHtml}
       <div class="message-content">
         <div class="message-header">
-          <span class="message-author" onclick="app.openUserProfile('${message.userId}')">${this.escapeHtml(displayName)}</span>
-          <span class="message-time" title="${new Date(message.createdAt).toLocaleString()}">${time}</span>
+          <span class="message-author" onclick="app.openUserProfile('${message.userId}')">
+            ${this.escapeHtml(displayName)}
+            ${roleBadgeHtml}
+          </span>
+          ${this.settings.showTimestamps ? `<span class="message-time" title="${new Date(message.createdAt).toLocaleString()}">${time}</span>` : ''}
           ${message.edited ? '<span class="message-edited">(edited)</span>' : ''}
         </div>
         ${replyHtml}
@@ -1983,7 +3358,7 @@ class ChatApp {
           <button class="btn-icon-tiny" onclick="app.openThread('${message.id}')" title="Start Thread">
             <i class="fas fa-comments"></i>
           </button>
-          ${message.userId === this.user?.id ? `
+          ${isOwn ? `
             <button class="btn-icon-tiny" onclick="app.editMessage('${message.id}')" title="Edit">
               <i class="fas fa-edit"></i>
             </button>
@@ -1994,6 +3369,7 @@ class ChatApp {
           <button class="btn-icon-tiny" onclick="app.pinMessage('${message.id}')" title="Pin">
             <i class="fas fa-thumbtack"></i>
           </button>
+          ${adminActionsHtml}
         </div>
       ` : ''}
     `;
@@ -2003,6 +3379,48 @@ class ChatApp {
     if (scroll) {
       this.scrollToBottom();
     }
+  }
+
+  getUserRole(userId) {
+    if (userId === this.user?.id) {
+      return this.user.role;
+    }
+    const user = this.onlineUsers.get(userId);
+    return user?.role || CONFIG.USER_ROLES.MEMBER;
+  }
+
+  getRoleBadgeHtml(role) {
+    const badges = {
+      [CONFIG.USER_ROLES.MASTER]: '<span class="role-badge master" title="Master"><i class="fas fa-crown"></i></span>',
+      [CONFIG.USER_ROLES.ADMIN]: '<span class="role-badge admin" title="Admin"><i class="fas fa-shield-alt"></i></span>',
+      [CONFIG.USER_ROLES.MODERATOR]: '<span class="role-badge moderator" title="Moderator"><i class="fas fa-gavel"></i></span>'
+    };
+    return badges[role] || '';
+  }
+
+  applyMessageAlignment() {
+    const messages = document.querySelectorAll('.message.own');
+    messages.forEach(msg => {
+      if (this.settings.messageAlignment === 'right') {
+        msg.classList.add('aligned-right');
+      } else {
+        msg.classList.remove('aligned-right');
+      }
+    });
+    localStorage.setItem('messageAlignment', this.settings.messageAlignment);
+  }
+
+  adminDeleteMessage(messageId) {
+    this.showConfirmModal(
+      'Delete Message',
+      'Are you sure you want to delete this message? This action will be logged.',
+      async () => {
+        await this.adminService.deleteAnyMessage(messageId, this.currentRoom);
+        this.handleMessageDeleted({ messageId });
+      },
+      'Delete',
+      'danger'
+    );
   }
 
   addDateSeparator(date) {
@@ -2020,10 +3438,10 @@ class ChatApp {
 
     let formatted = this.escapeHtml(text);
 
-    // URLs
+    // URLs with preview
     formatted = formatted.replace(
       /(https?:\/\/[^\s<]+[^<.,:;"')\]\s])/g,
-      '<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>'
+      '<a href="$1" target="_blank" rel="noopener noreferrer" class="message-link">$1</a>'
     );
 
     // Mentions (@username)
@@ -2032,22 +3450,47 @@ class ChatApp {
       '<span class="mention" onclick="app.handleMentionClick(\'$1\')">@$1</span>'
     );
 
+    // Channel mentions (#channel)
+    formatted = formatted.replace(
+      /#(\w+)/g,
+      '<span class="channel-mention" onclick="app.handleChannelClick(\'$1\')">#$1</span>'
+    );
+
     // Bold (**text**)
     formatted = formatted.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
 
-    // Italic (*text*)
+    // Italic (*text* or _text_)
     formatted = formatted.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+    formatted = formatted.replace(/_([^_]+)_/g, '<em>$1</em>');
 
-    // Code (`code`)
+    // Code blocks (```code```)
+    formatted = formatted.replace(/```([\s\S]+?)```/g, '<pre class="code-block">$1</pre>');
+
+    // Inline code (`code`)
     formatted = formatted.replace(/`([^`]+)`/g, '<code>$1</code>');
 
     // Strikethrough (~~text~~)
     formatted = formatted.replace(/~~(.+?)~~/g, '<del>$1</del>');
 
+    // Spoilers (||text||)
+    formatted = formatted.replace(/\|\|(.+?)\|\|/g, '<span class="spoiler" onclick="this.classList.toggle(\'revealed\')">$1</span>');
+
+    // Blockquote (> text)
+    formatted = formatted.replace(/^&gt; (.+)$/gm, '<blockquote>$1</blockquote>');
+
     // Newlines
     formatted = formatted.replace(/\n/g, '<br>');
 
     return formatted;
+  }
+
+  handleChannelClick(channelName) {
+    const room = this.rooms.find(r => r.name.toLowerCase() === channelName.toLowerCase());
+    if (room) {
+      this.joinRoom(room.id);
+    } else {
+      this.showToast('Channel not found', 'warning');
+    }
   }
 
   renderReactions(reactions, messageId) {
@@ -2100,14 +3543,59 @@ class ChatApp {
       return;
     }
 
-    const newText = prompt('Edit message:', message.text);
-    if (newText !== null && newText.trim() !== message.text) {
-      this.wsSend({
-        type: 'edit_message',
-        messageId,
-        text: newText.trim()
-      });
-    }
+    // Create inline edit
+    const messageEl = document.querySelector(`[data-message-id="${messageId}"]`);
+    const textEl = messageEl?.querySelector('.message-text');
+    if (!textEl) return;
+
+    const originalText = message.text;
+    const editContainer = document.createElement('div');
+    editContainer.className = 'inline-edit-container';
+    editContainer.innerHTML = `
+      <textarea class="inline-edit-input">${this.escapeHtml(originalText)}</textarea>
+      <div class="inline-edit-actions">
+        <button class="btn-small btn-primary save-edit-btn">Save</button>
+        <button class="btn-small btn-secondary cancel-edit-btn">Cancel</button>
+      </div>
+    `;
+
+    textEl.replaceWith(editContainer);
+
+    const textarea = editContainer.querySelector('.inline-edit-input');
+    textarea.focus();
+    textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+
+    const saveEdit = () => {
+      const newText = textarea.value.trim();
+      if (newText && newText !== originalText) {
+        this.wsSend({
+          type: 'edit_message',
+          messageId,
+          text: newText
+        });
+      }
+      restoreOriginal();
+    };
+
+    const restoreOriginal = () => {
+      const newTextEl = document.createElement('div');
+      newTextEl.className = 'message-text';
+      newTextEl.innerHTML = this.formatMessageText(message.text);
+      editContainer.replaceWith(newTextEl);
+    };
+
+    editContainer.querySelector('.save-edit-btn').addEventListener('click', saveEdit);
+    editContainer.querySelector('.cancel-edit-btn').addEventListener('click', restoreOriginal);
+
+    textarea.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        saveEdit();
+      }
+      if (e.key === 'Escape') {
+        restoreOriginal();
+      }
+    });
   }
 
   deleteMessage(messageId) {
@@ -2119,12 +3607,18 @@ class ChatApp {
       return;
     }
 
-    if (confirm('Delete this message?')) {
-      this.wsSend({
-        type: 'delete_message',
-        messageId
-      });
-    }
+    this.showConfirmModal(
+      'Delete Message',
+      'Are you sure you want to delete this message?',
+      () => {
+        this.wsSend({
+          type: 'delete_message',
+          messageId
+        });
+      },
+      'Delete',
+      'danger'
+    );
   }
 
   handleMessageEdited(data) {
@@ -2140,14 +3634,12 @@ class ChatApp {
       }
     }
 
-    // Update stored message
     const roomMessages = this.messages.get(this.currentRoom) || [];
     const msg = roomMessages.find(m => m.id === data.messageId);
     if (msg) {
       msg.text = data.text;
       msg.edited = true;
-      // Update cache
-      localStorage.setItem(`cachedMessages_${this.currentRoom}`, JSON.stringify(roomMessages.slice(-100)));
+      localStorage.setItem(`cachedMessages_${this.currentRoom}`, JSON.stringify(roomMessages.slice(-CONFIG.MESSAGE_CACHE_LIMIT)));
     }
   }
 
@@ -2155,19 +3647,21 @@ class ChatApp {
     const messageEl = document.querySelector(`[data-message-id="${data.messageId}"]`);
     if (messageEl) {
       messageEl.classList.add('deleted');
-      setTimeout(() => messageEl.remove(), 300);
+      if (this.settings.animationsEnabled) {
+        messageEl.style.animation = 'fadeOut 0.3s ease forwards';
+        setTimeout(() => messageEl.remove(), 300);
+      } else {
+        messageEl.remove();
+      }
     }
 
-    // Remove from rendered set
     this.renderedMessageIds.delete(data.messageId);
 
-    // Remove from stored messages
     const roomMessages = this.messages.get(this.currentRoom) || [];
     const index = roomMessages.findIndex(m => m.id === data.messageId);
     if (index > -1) {
       roomMessages.splice(index, 1);
-      // Update cache
-      localStorage.setItem(`cachedMessages_${this.currentRoom}`, JSON.stringify(roomMessages.slice(-100)));
+      localStorage.setItem(`cachedMessages_${this.currentRoom}`, JSON.stringify(roomMessages.slice(-CONFIG.MESSAGE_CACHE_LIMIT)));
     }
   }
 
@@ -2178,9 +3672,8 @@ class ChatApp {
       return;
     }
 
-    const quickReactions = ['👍', '❤️', '😂', '😮', '😢', '🎉', '🔥', '👀'];
+    const quickReactions = ['👍', '❤️', '😂', '😮', '😢', '🎉', '🔥', '👀', '💯', '🙏'];
 
-    // Remove existing picker
     document.querySelectorAll('.quick-reactions').forEach(el => el.remove());
 
     const messageEl = document.querySelector(`[data-message-id="${messageId}"]`);
@@ -2190,10 +3683,16 @@ class ChatApp {
     picker.className = 'quick-reactions';
     picker.innerHTML = quickReactions.map(emoji =>
       `<button onclick="app.toggleReaction('${messageId}', '${emoji}'); this.parentElement.remove();">${emoji}</button>`
-    ).join('');
+    ).join('') + `<button class="more-emoji-btn" onclick="app.openEmojiPickerForMessage('${messageId}')"><i class="fas fa-plus"></i></button>`;
 
     messageEl.appendChild(picker);
     setTimeout(() => picker.remove(), 5000);
+  }
+
+  openEmojiPickerForMessage(messageId) {
+    // Store message ID for emoji picker
+    this.emojiPickerTargetMessage = messageId;
+    this.chatElements.emojiPicker?.classList.add('active');
   }
 
   toggleReaction(messageId, emoji) {
@@ -2218,7 +3717,6 @@ class ChatApp {
       }
     }
 
-    // Update stored message
     const roomMessages = this.messages.get(this.currentRoom) || [];
     const msg = roomMessages.find(m => m.id === data.messageId);
     if (msg) {
@@ -2243,13 +3741,22 @@ class ChatApp {
     }
   }
 
-  showSystemMessage(text) {
+  showSystemMessage(text, type = 'info') {
     const container = this.chatElements.messages;
     if (!container) return;
 
+    const icons = {
+      info: 'fa-info-circle',
+      warning: 'fa-exclamation-triangle',
+      error: 'fa-exclamation-circle',
+      success: 'fa-check-circle',
+      join: 'fa-user-plus',
+      leave: 'fa-user-minus'
+    };
+
     const messageEl = document.createElement('div');
-    messageEl.className = 'system-message';
-    messageEl.innerHTML = `<i class="fas fa-info-circle"></i> ${this.escapeHtml(text)}`;
+    messageEl.className = `system-message ${type}`;
+    messageEl.innerHTML = `<i class="fas ${icons[type] || icons.info}"></i> ${this.escapeHtml(text)}`;
     container.appendChild(messageEl);
     this.scrollToBottom();
   }
@@ -2284,7 +3791,10 @@ class ChatApp {
     if (data.userId === this.user?.id) return;
 
     if (data.isTyping) {
-      this.typingUsers.set(data.userId, data.username);
+      this.typingUsers.set(data.userId, {
+        username: data.username,
+        displayName: data.displayName
+      });
     } else {
       this.typingUsers.delete(data.userId);
     }
@@ -2305,11 +3815,11 @@ class ChatApp {
 
     let text = '';
     if (users.length === 1) {
-      text = `${users[0]} is typing`;
+      text = `${users[0].displayName || users[0].username} is typing`;
     } else if (users.length === 2) {
-      text = `${users[0]} and ${users[1]} are typing`;
+      text = `${users[0].displayName || users[0].username} and ${users[1].displayName || users[1].username} are typing`;
     } else {
-      text = `${users[0]} and ${users.length - 1} others are typing`;
+      text = `${users[0].displayName || users[0].username} and ${users.length - 1} others are typing`;
     }
 
     const textEl = indicator.querySelector('.typing-text');
@@ -2324,9 +3834,13 @@ class ChatApp {
     const file = event.target.files?.[0];
     if (!file) return;
 
-    const maxSize = 10 * 1024 * 1024; // 10MB
-    if (file.size > maxSize) {
-      this.showToast('File size must be less than 10MB', 'error');
+    this.handleFileUpload(file);
+    event.target.value = '';
+  }
+
+  async handleFileUpload(file) {
+    if (file.size > CONFIG.MAX_FILE_SIZE) {
+      this.showToast(`File size must be less than ${this.formatFileSize(CONFIG.MAX_FILE_SIZE)}`, 'error');
       return;
     }
 
@@ -2336,14 +3850,14 @@ class ChatApp {
     }
 
     this.uploadFile(file);
-    event.target.value = '';
   }
 
   async uploadFile(file) {
     const formData = new FormData();
     formData.append('file', file);
 
-    this.showToast('Uploading file...', 'info');
+    // Show upload progress
+    this.showUploadProgress(file.name);
 
     try {
       const response = await fetch('/api/upload/attachment', {
@@ -2357,13 +3871,34 @@ class ChatApp {
       if (response.ok && data.success) {
         this.attachment = data.file;
         this.showAttachmentPreview(data.file);
+        this.hideUploadProgress();
         this.showToast('File uploaded', 'success');
       } else {
+        this.hideUploadProgress();
         this.showToast(data.error || 'Upload failed', 'error');
       }
     } catch (error) {
       console.error('Upload error:', error);
+      this.hideUploadProgress();
       this.showToast('Failed to upload file', 'error');
+    }
+  }
+
+  showUploadProgress(fileName) {
+    const preview = this.chatElements.attachmentPreview;
+    if (!preview) return;
+
+    preview.classList.add('active', 'uploading');
+    const nameEl = preview.querySelector('.attachment-name');
+    const sizeEl = preview.querySelector('.attachment-size');
+    if (nameEl) nameEl.textContent = fileName;
+    if (sizeEl) sizeEl.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Uploading...';
+  }
+
+  hideUploadProgress() {
+    const preview = this.chatElements.attachmentPreview;
+    if (preview) {
+      preview.classList.remove('uploading');
     }
   }
 
@@ -2372,15 +3907,35 @@ class ChatApp {
     if (!preview) return;
 
     preview.classList.add('active');
+    preview.classList.remove('uploading');
+    
     const nameEl = preview.querySelector('.attachment-name');
     const sizeEl = preview.querySelector('.attachment-size');
+    const thumbEl = preview.querySelector('.attachment-thumbnail');
+    
     if (nameEl) nameEl.textContent = file.name;
     if (sizeEl) sizeEl.textContent = this.formatFileSize(file.size);
+    
+    // Show thumbnail for images
+    if (thumbEl && file.type?.startsWith('image/')) {
+      thumbEl.innerHTML = `<img src="${file.url}" alt="">`;
+      thumbEl.style.display = 'block';
+    } else if (thumbEl) {
+      thumbEl.style.display = 'none';
+    }
   }
 
   clearAttachment() {
     this.attachment = null;
-    this.chatElements.attachmentPreview?.classList.remove('active');
+    const preview = this.chatElements.attachmentPreview;
+    if (preview) {
+      preview.classList.remove('active', 'uploading');
+      const thumbEl = preview.querySelector('.attachment-thumbnail');
+      if (thumbEl) {
+        thumbEl.innerHTML = '';
+        thumbEl.style.display = 'none';
+      }
+    }
   }
 
   getFileIcon(mimeType) {
@@ -2391,9 +3946,92 @@ class ChatApp {
     if (mimeType.includes('pdf')) return 'fa-file-pdf';
     if (mimeType.includes('word') || mimeType.includes('document')) return 'fa-file-word';
     if (mimeType.includes('sheet') || mimeType.includes('excel')) return 'fa-file-excel';
-    if (mimeType.includes('zip') || mimeType.includes('rar') || mimeType.includes('archive')) return 'fa-file-archive';
-    if (mimeType.includes('text')) return 'fa-file-alt';
+    if (mimeType.includes('presentation') || mimeType.includes('powerpoint')) return 'fa-file-powerpoint';
+    if (mimeType.includes('zip') || mimeType.includes('rar') || mimeType.includes('archive') || mimeType.includes('compressed')) return 'fa-file-archive';
+    if (mimeType.includes('text') || mimeType.includes('plain')) return 'fa-file-alt';
+    if (mimeType.includes('code') || mimeType.includes('javascript') || mimeType.includes('json') || mimeType.includes('html') || mimeType.includes('css')) return 'fa-file-code';
     return 'fa-file';
+  }
+
+  // ============================================
+  // AVATAR HANDLING
+  // ============================================
+  async handleAvatarSelect(event) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    // Validate file
+    const validation = this.avatarService.validateFile(file);
+    if (!validation.valid) {
+      this.showToast(validation.errors.join('. '), 'error');
+      if (this.settingsModalElements.avatarError) {
+        this.settingsModalElements.avatarError.textContent = validation.errors.join('. ');
+        this.settingsModalElements.avatarError.style.display = 'block';
+      }
+      return;
+    }
+
+    // Hide error
+    if (this.settingsModalElements.avatarError) {
+      this.settingsModalElements.avatarError.style.display = 'none';
+    }
+
+    // Show preview immediately
+    try {
+      const preview = await this.avatarService.createPreview(file);
+      if (this.settingsModalElements.avatarPreview) {
+        this.settingsModalElements.avatarPreview.src = preview;
+        this.settingsModalElements.avatarPreview.style.display = 'block';
+      }
+      if (this.settingsModalElements.avatar) {
+        this.settingsModalElements.avatar.src = preview;
+      }
+    } catch (error) {
+      console.error('Preview error:', error);
+    }
+
+    // Compress and upload
+    try {
+      const compressedFile = await this.avatarService.compressImage(file);
+      await this.uploadAvatar(compressedFile);
+    } catch (error) {
+      console.error('Avatar processing error:', error);
+      this.showToast('Failed to process avatar', 'error');
+    }
+  }
+
+  async uploadAvatar(file) {
+    if (!navigator.onLine) {
+      this.showToast('Cannot upload avatar while offline', 'error');
+      return;
+    }
+
+    const formData = new FormData();
+    formData.append('avatar', file);
+
+    this.showToast('Uploading avatar...', 'info');
+
+    try {
+      const response = await fetch('/api/users/avatar', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${this.token}` },
+        body: formData
+      });
+
+      const data = await response.json();
+
+      if (response.ok && data.success) {
+        this.user.avatar = data.avatar;
+        localStorage.setItem('cachedUser', JSON.stringify(this.user));
+        this.updateUI();
+        this.showToast('Avatar updated', 'success');
+      } else {
+        this.showToast(data.error || 'Failed to upload avatar', 'error');
+      }
+    } catch (error) {
+      console.error('Avatar upload error:', error);
+      this.showToast('Failed to upload avatar', 'error');
+    }
   }
 
   // ============================================
@@ -2427,7 +4065,13 @@ class ChatApp {
       );
     }
 
-    this.mentionUsers = users.slice(0, 8);
+    // Sort by relevance and role
+    users.sort((a, b) => {
+      const roleOrder = { master: 0, admin: 1, moderator: 2, member: 3 };
+      return (roleOrder[a.role] || 3) - (roleOrder[b.role] || 3);
+    });
+
+    this.mentionUsers = users.slice(0, 10);
     this.mentionIndex = 0;
     this.showMentionDropdown();
   }
@@ -2446,9 +4090,12 @@ class ChatApp {
       <div class="mention-item ${index === this.mentionIndex ? 'selected' : ''}" 
            data-user-id="${user.id}" 
            data-username="${user.username}">
-        <img class="mention-avatar" src="${user.avatar || this.generateDefaultAvatar(user.username)}" alt="">
-        <span class="mention-name">${this.escapeHtml(user.displayName || user.username)}</span>
-        <span class="mention-username">@${this.escapeHtml(user.username)}</span>
+        <img class="mention-avatar" src="${user.avatar || this.avatarService.generateDefault(user.username)}" alt="">
+        <div class="mention-info">
+          <span class="mention-name">${this.escapeHtml(user.displayName || user.username)}</span>
+          <span class="mention-username">@${this.escapeHtml(user.username)}</span>
+        </div>
+        ${this.getRoleBadgeHtml(user.role)}
       </div>
     `).join('');
 
@@ -2480,6 +4127,10 @@ class ChatApp {
     items?.forEach((item, index) => {
       item.classList.toggle('selected', index === this.mentionIndex);
     });
+
+    // Scroll to selected item
+    const selected = this.mentionElements.list?.querySelector('.mention-item.selected');
+    selected?.scrollIntoView({ block: 'nearest' });
   }
 
   selectCurrentMention() {
@@ -2517,15 +4168,15 @@ class ChatApp {
     );
     if (user) {
       this.openUserProfile(user.id);
+    } else {
+      this.showToast('User not found or offline', 'info');
     }
   }
-
   // ============================================
   // DIRECT MESSAGES (WITH OFFLINE SUPPORT)
   // ============================================
   async loadDMConversations() {
     if (!navigator.onLine) {
-      // Load from cache
       const cached = localStorage.getItem('cachedDMConversations');
       if (cached) {
         try {
@@ -2546,13 +4197,11 @@ class ChatApp {
 
       if (response.conversations) {
         this.dmConversations = response.conversations;
-        // Cache conversations
         localStorage.setItem('cachedDMConversations', JSON.stringify(response.conversations));
         this.renderDMList();
       }
     } catch (error) {
       console.error('Error loading DM conversations:', error);
-      // Load from cache
       const cached = localStorage.getItem('cachedDMConversations');
       if (cached) {
         try {
@@ -2572,6 +4221,7 @@ class ChatApp {
     if (this.dmConversations.length === 0) {
       container.innerHTML = `
         <div class="dm-empty-hint">
+          <i class="fas fa-comments"></i>
           <p>No conversations yet</p>
         </div>
       `;
@@ -2581,12 +4231,13 @@ class ChatApp {
     container.innerHTML = this.dmConversations.map(conv => {
       const user = conv.participant;
       const isOnline = this.onlineUsers.has(user.id);
-      const status = isOnline ? 'online' : 'offline';
+      const status = isOnline ? (this.onlineUsers.get(user.id)?.status || 'online') : 'offline';
+      const unreadClass = conv.unreadCount > 0 ? 'has-unread' : '';
 
       return `
-        <div class="dm-item" data-user-id="${user.id}" data-tooltip="${this.escapeHtml(user.displayName || user.username)}">
+        <div class="dm-item ${unreadClass}" data-user-id="${user.id}" data-tooltip="${this.escapeHtml(user.displayName || user.username)}">
           <div class="user-avatar-container">
-            <img class="user-avatar" src="${user.avatar || this.generateDefaultAvatar(user.username)}" alt="">
+            <img class="user-avatar" src="${user.avatar || this.avatarService.generateDefault(user.username)}" alt="">
             <span class="status-dot ${status}"></span>
           </div>
           <div class="dm-info">
@@ -2595,7 +4246,7 @@ class ChatApp {
               <span class="dm-preview">${this.escapeHtml(this.truncateText(conv.lastMessage.text, 25))}</span>
             ` : ''}
           </div>
-          ${conv.unreadCount > 0 ? `<span class="dm-badge">${conv.unreadCount}</span>` : ''}
+          ${conv.unreadCount > 0 ? `<span class="dm-badge">${conv.unreadCount > 99 ? '99+' : conv.unreadCount}</span>` : ''}
         </div>
       `;
     }).join('');
@@ -2614,7 +4265,11 @@ class ChatApp {
 
   populateDMUsersList() {
     const users = Array.from(this.onlineUsers.values())
-      .filter(u => u.id !== this.user?.id);
+      .filter(u => u.id !== this.user?.id)
+      .sort((a, b) => {
+        const roleOrder = { master: 0, admin: 1, moderator: 2, member: 3 };
+        return (roleOrder[a.role] || 3) - (roleOrder[b.role] || 3);
+      });
 
     const container = this.newDMElements.usersList;
     if (!container) return;
@@ -2632,12 +4287,15 @@ class ChatApp {
     container.innerHTML = users.map(user => `
       <div class="dm-user-item" data-user-id="${user.id}">
         <div class="user-avatar-container">
-          <img class="user-avatar" src="${user.avatar || this.generateDefaultAvatar(user.username)}" alt="">
+          <img class="user-avatar" src="${user.avatar || this.avatarService.generateDefault(user.username)}" alt="">
           <span class="status-dot ${user.status || 'online'}"></span>
         </div>
         <div class="dm-user-item-info">
-          <span class="dm-user-item-name">${this.escapeHtml(user.displayName || user.username)}</span>
-          <span class="dm-user-item-status">${user.status || 'Online'}</span>
+          <span class="dm-user-item-name">
+            ${this.escapeHtml(user.displayName || user.username)}
+            ${this.getRoleBadgeHtml(user.role)}
+          </span>
+          <span class="dm-user-item-status">${this.getStatusText(user.status)}</span>
         </div>
       </div>
     `).join('');
@@ -2648,6 +4306,17 @@ class ChatApp {
         this.openDMChat(item.dataset.userId);
       });
     });
+  }
+
+  getStatusText(status) {
+    const statusTexts = {
+      online: 'Online',
+      away: 'Away',
+      dnd: 'Do Not Disturb',
+      invisible: 'Invisible',
+      offline: 'Offline'
+    };
+    return statusTexts[status] || 'Online';
   }
 
   filterDMUsers(query) {
@@ -2670,6 +4339,7 @@ class ChatApp {
     if (users.length === 0) {
       container.innerHTML = `
         <div class="dm-empty-state">
+          <i class="fas fa-search"></i>
           <p>No users found</p>
         </div>
       `;
@@ -2679,12 +4349,12 @@ class ChatApp {
     container.innerHTML = users.map(user => `
       <div class="dm-user-item" data-user-id="${user.id}">
         <div class="user-avatar-container">
-          <img class="user-avatar" src="${user.avatar || this.generateDefaultAvatar(user.username)}" alt="">
+          <img class="user-avatar" src="${user.avatar || this.avatarService.generateDefault(user.username)}" alt="">
           <span class="status-dot ${user.status || 'online'}"></span>
         </div>
         <div class="dm-user-item-info">
           <span class="dm-user-item-name">${this.escapeHtml(user.displayName || user.username)}</span>
-          <span class="dm-user-item-status">${user.status || 'Online'}</span>
+          <span class="dm-user-item-status">${this.getStatusText(user.status)}</span>
         </div>
       </div>
     `).join('');
@@ -2698,8 +4368,6 @@ class ChatApp {
   }
 
   async openDMChat(userId) {
-    console.log('Opening DM chat with user:', userId);
-
     const user = this.onlineUsers.get(userId) || 
                  this.dmConversations.find(c => c.participant.id === userId)?.participant;
 
@@ -2712,27 +4380,29 @@ class ChatApp {
     this.renderedDMIds.clear();
 
     if (this.dmElements.userAvatar) {
-      this.dmElements.userAvatar.src = user.avatar || this.generateDefaultAvatar(user.username);
+      this.dmElements.userAvatar.src = user.avatar || this.avatarService.generateDefault(user.username);
     }
     if (this.dmElements.userName) {
-      this.dmElements.userName.textContent = user.displayName || user.username;
+      this.dmElements.userName.innerHTML = `
+        ${this.escapeHtml(user.displayName || user.username)}
+        ${this.getRoleBadgeHtml(user.role)}
+      `;
     }
     const isOnline = this.onlineUsers.has(userId);
+    const status = isOnline ? (this.onlineUsers.get(userId)?.status || 'online') : 'offline';
     if (this.dmElements.userStatus) {
-      this.dmElements.userStatus.className = `status-indicator ${isOnline ? 'online' : 'offline'}`;
+      this.dmElements.userStatus.className = `status-indicator ${status}`;
     }
     if (this.dmElements.userStatusText) {
-      this.dmElements.userStatusText.textContent = isOnline ? 'Online' : 'Offline';
+      this.dmElements.userStatusText.textContent = this.getStatusText(status);
     }
 
     this.dmElements.view?.classList.add('active');
-
     await this.loadDMMessages(userId);
   }
 
   async loadDMMessages(userId) {
     if (!navigator.onLine) {
-      // Load from cache
       const cached = localStorage.getItem(`cachedDM_${userId}`);
       if (cached) {
         try {
@@ -2754,23 +4424,18 @@ class ChatApp {
 
       if (response.messages) {
         this.renderDMMessages(response.messages);
-        // Cache messages
         localStorage.setItem(`cachedDM_${userId}`, JSON.stringify(response.messages));
       }
     } catch (error) {
       console.error('Error loading DM messages:', error);
-      // Load from cache
       const cached = localStorage.getItem(`cachedDM_${this.currentDM}`);
       if (cached) {
         try {
           const messages = JSON.parse(cached);
           this.renderDMMessages(messages);
-          this.showToast('Showing cached messages', 'info');
         } catch (e) {
           console.error('Failed to load cached DM messages:', e);
         }
-      } else {
-        this.showToast('Failed to load messages', 'error');
       }
     }
   }
@@ -2795,17 +4460,18 @@ class ChatApp {
     container.innerHTML = messages.map(msg => {
       this.renderedDMIds.add(msg.id);
       const isOwn = msg.userId === this.user?.id;
-      const avatar = msg.avatar || this.generateDefaultAvatar(msg.username);
+      const avatar = msg.avatar || this.avatarService.generateDefault(msg.username);
       const time = this.formatTime(msg.createdAt);
       const pendingClass = msg.pending ? 'pending' : '';
+      const alignmentClass = this.settings.messageAlignment === 'right' && isOwn ? 'aligned-right' : '';
 
       return `
-        <div class="message ${isOwn ? 'own' : ''} ${pendingClass}" data-message-id="${msg.id}">
-          <img class="message-avatar" src="${avatar}" alt="">
+        <div class="message ${isOwn ? 'own' : ''} ${pendingClass} ${alignmentClass}" data-message-id="${msg.id}">
+          ${this.settings.showAvatars ? `<img class="message-avatar" src="${avatar}" alt="">` : ''}
           <div class="message-content">
             <div class="message-header">
               <span class="message-author">${this.escapeHtml(msg.displayName || msg.username)}</span>
-              <span class="message-time">${time}</span>
+              ${this.settings.showTimestamps ? `<span class="message-time">${time}</span>` : ''}
             </div>
             <div class="message-text">${this.formatMessageText(msg.text)}</div>
             ${msg.pending ? '<div class="pending-indicator"><i class="fas fa-clock"></i> Sending...</div>' : ''}
@@ -2824,29 +4490,16 @@ class ChatApp {
     const input = this.dmElements.input;
     if (!input) return;
 
-    const text = input.value ? input.value.trim() : '';
+    const text = input.value?.trim();
+    if (!text || !this.currentDM) return;
 
-    if (!text) {
-      this.showToast('Please enter a message', 'warning');
-      input.focus();
-      return;
-    }
-
-    if (!this.currentDM) {
-      this.showToast('No conversation selected', 'error');
-      return;
-    }
-
-    // Clear input immediately
     input.value = '';
     input.style.height = 'auto';
 
     const sendBtn = this.dmElements.sendBtn;
     if (sendBtn) sendBtn.disabled = true;
 
-    // Check if online
     if (!navigator.onLine) {
-      // Queue for later
       const queued = this.pollingService.queueOfflineMessage({
         type: 'dm',
         recipientId: this.currentDM,
@@ -2854,7 +4507,6 @@ class ChatApp {
         isDM: true
       });
       
-      // Show message immediately with "pending" indicator
       this.showPendingDMMessage(queued);
       this.showToast('Message queued - will send when online', 'info');
       
@@ -2867,35 +4519,31 @@ class ChatApp {
       const response = await this.apiRequest(`/api/dm/${this.currentDM}`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${this.token}` },
-        body: JSON.stringify({ text: text })
+        body: JSON.stringify({ text })
       });
 
       if (response.success) {
         this.appendDMMessage(response.message);
-        // Update cache
         this.updateDMCache(this.currentDM, response.message);
+        this.playSound('sent');
       } else {
-        // Queue message if send failed
         const queued = this.pollingService.queueOfflineMessage({
           type: 'dm',
           recipientId: this.currentDM,
           text: text,
           isDM: true
         });
-        
         this.showPendingDMMessage(queued);
         this.showToast(response.error || 'Message queued - will retry', 'warning');
       }
     } catch (error) {
       console.error('Error sending DM:', error);
-      // Queue message if send failed
       const queued = this.pollingService.queueOfflineMessage({
         type: 'dm',
         recipientId: this.currentDM,
         text: text,
         isDM: true
       });
-      
       this.showPendingDMMessage(queued);
       this.showToast('Message queued - will retry when connected', 'warning');
     } finally {
@@ -2904,7 +4552,6 @@ class ChatApp {
     }
   }
 
-  // Sync DM message to server (called by PollingService)
   async syncDMMessageToServer(message) {
     const response = await this.apiRequest(`/api/dm/${message.recipientId}`, {
       method: 'POST',
@@ -2919,11 +4566,9 @@ class ChatApp {
     return response.message;
   }
 
-  // Show pending DM message in UI
   showPendingDMMessage(message) {
-    const pendingMessage = {
+    this.appendDMMessage({
       id: message.id,
-      tempId: message.id,
       userId: this.user?.id,
       username: this.user?.username,
       displayName: this.user?.displayName,
@@ -2931,12 +4576,9 @@ class ChatApp {
       text: message.text,
       createdAt: new Date(message.queuedAt).toISOString(),
       pending: true
-    };
-    
-    this.appendDMMessage(pendingMessage);
+    });
   }
 
-  // Update DM cache with new message
   updateDMCache(userId, message) {
     const cached = localStorage.getItem(`cachedDM_${userId}`);
     let messages = [];
@@ -2948,38 +4590,32 @@ class ChatApp {
       }
     }
     messages.push(message);
-    // Keep last 100 messages
-    localStorage.setItem(`cachedDM_${userId}`, JSON.stringify(messages.slice(-100)));
+    localStorage.setItem(`cachedDM_${userId}`, JSON.stringify(messages.slice(-CONFIG.MESSAGE_CACHE_LIMIT)));
   }
 
   appendDMMessage(message) {
     const container = this.dmElements.messages;
     if (!container) return;
 
-    // Deduplication check
-    if (this.renderedDMIds.has(message.id)) {
-      console.log('[Dedup] DM already rendered:', message.id);
-      return;
-    }
+    if (this.renderedDMIds.has(message.id)) return;
     this.renderedDMIds.add(message.id);
 
-    // Remove empty state if exists
     container.querySelector('.dm-empty-state')?.remove();
 
     const isOwn = message.userId === this.user?.id;
-    const avatar = message.avatar || this.generateDefaultAvatar(message.username);
+    const avatar = message.avatar || this.avatarService.generateDefault(message.username);
     const time = this.formatTime(message.createdAt);
-    const pendingClass = message.pending ? 'pending' : '';
+    const alignmentClass = this.settings.messageAlignment === 'right' && isOwn ? 'aligned-right' : '';
 
     const messageEl = document.createElement('div');
-    messageEl.className = `message ${isOwn ? 'own' : ''} ${pendingClass}`;
+    messageEl.className = `message ${isOwn ? 'own' : ''} ${message.pending ? 'pending' : ''} ${alignmentClass}`;
     messageEl.dataset.messageId = message.id;
     messageEl.innerHTML = `
-      <img class="message-avatar" src="${avatar}" alt="">
+      ${this.settings.showAvatars ? `<img class="message-avatar" src="${avatar}" alt="">` : ''}
       <div class="message-content">
         <div class="message-header">
           <span class="message-author">${this.escapeHtml(message.displayName || message.username)}</span>
-          <span class="message-time">${time}</span>
+          ${this.settings.showTimestamps ? `<span class="message-time">${time}</span>` : ''}
         </div>
         <div class="message-text">${this.formatMessageText(message.text)}</div>
         ${message.pending ? '<div class="pending-indicator"><i class="fas fa-clock"></i> Sending...</div>' : ''}
@@ -2998,30 +4634,19 @@ class ChatApp {
     this.currentDM = null;
     this.renderedDMIds.clear();
     this.dmElements.view?.classList.remove('active');
-    if (this.dmElements.messages) {
-      this.dmElements.messages.innerHTML = '';
-    }
-    if (this.dmElements.input) {
-      this.dmElements.input.value = '';
-    }
+    if (this.dmElements.messages) this.dmElements.messages.innerHTML = '';
+    if (this.dmElements.input) this.dmElements.input.value = '';
   }
 
   handleDMReceived(data) {
-    console.log('DM received:', data);
-
-    // Deduplication check
-    if (this.renderedDMIds.has(data.message.id)) {
-      console.log('[Dedup] DM already exists:', data.message.id);
-      return;
-    }
+    if (this.renderedDMIds.has(data.message.id)) return;
 
     if (this.dmElements.view?.classList.contains('active') && this.currentDM === data.message.userId) {
       this.appendDMMessage(data.message);
-      // Update cache
       this.updateDMCache(this.currentDM, data.message);
     } else {
       this.showToast(`New message from ${data.message.displayName || data.message.username}`, 'info');
-      this.playNotificationSound();
+      this.playSound('notification');
     }
 
     this.loadDMConversations();
@@ -3033,15 +4658,13 @@ class ChatApp {
     if (!usernameEl) return;
 
     const username = usernameEl.textContent?.replace('@', '');
-    const user = Array.from(this.onlineUsers.values()).find(
-      u => u.username === username
-    );
+    const user = Array.from(this.onlineUsers.values()).find(u => u.username === username);
 
     if (user) {
       this.closeAllModals();
       this.openDMChat(user.id);
     } else {
-      this.showToast('User is offline', 'error');
+      this.showToast('User is offline', 'warning');
     }
   }
 
@@ -3080,9 +4703,9 @@ class ChatApp {
 
     if (!panel || !parentContainer || !repliesContainer) return;
 
-    const parentAvatar = parentMessage.avatar || this.generateDefaultAvatar(parentMessage.username);
+    const parentAvatar = parentMessage.avatar || this.avatarService.generateDefault(parentMessage.username);
     parentContainer.innerHTML = `
-      <div class="thread-message">
+      <div class="thread-message parent">
         <img class="message-avatar" src="${parentAvatar}" alt="">
         <div class="message-content">
           <div class="message-header">
@@ -3097,12 +4720,13 @@ class ChatApp {
     if (replies.length === 0) {
       repliesContainer.innerHTML = `
         <div class="thread-empty">
-          <p>No replies yet. Start the conversation!</p>
+          <i class="fas fa-comments"></i>
+          <p>No replies yet</p>
         </div>
       `;
     } else {
       repliesContainer.innerHTML = replies.map(reply => {
-        const avatar = reply.avatar || this.generateDefaultAvatar(reply.username);
+        const avatar = reply.avatar || this.avatarService.generateDefault(reply.username);
         return `
           <div class="thread-message reply">
             <img class="message-avatar" src="${avatar}" alt="">
@@ -3120,7 +4744,6 @@ class ChatApp {
 
     panel.classList.add('active');
     this.closePinnedPanel();
-
     this.threadElements.input?.focus();
   }
 
@@ -3131,7 +4754,7 @@ class ChatApp {
     if (!text || !this.currentThread) return;
 
     if (!navigator.onLine) {
-      this.showToast('Cannot send thread reply while offline', 'warning');
+      this.showToast('Cannot send reply while offline', 'warning');
       return;
     }
 
@@ -3145,6 +4768,7 @@ class ChatApp {
       if (response.success) {
         this.appendThreadReply(response.message);
         if (input) input.value = '';
+        this.playSound('sent');
       } else {
         this.showToast(response.error || 'Failed to send reply', 'error');
       }
@@ -3160,9 +4784,9 @@ class ChatApp {
 
     container.querySelector('.thread-empty')?.remove();
 
-    const avatar = message.avatar || this.generateDefaultAvatar(message.username);
+    const avatar = message.avatar || this.avatarService.generateDefault(message.username);
     const replyEl = document.createElement('div');
-    replyEl.className = 'thread-message reply';
+    replyEl.className = 'thread-message reply new';
     replyEl.innerHTML = `
       <img class="message-avatar" src="${avatar}" alt="">
       <div class="message-content">
@@ -3176,6 +4800,8 @@ class ChatApp {
 
     container.appendChild(replyEl);
     container.scrollTop = container.scrollHeight;
+
+    setTimeout(() => replyEl.classList.remove('new'), 500);
   }
 
   handleThreadReplyReceived(data) {
@@ -3227,14 +4853,14 @@ class ChatApp {
     }
 
     container.innerHTML = this.pinnedMessages.map(msg => {
-      const avatar = msg.avatar || this.generateDefaultAvatar(msg.username);
+      const avatar = msg.avatar || this.avatarService.generateDefault(msg.username);
       return `
         <div class="pinned-message" onclick="app.scrollToMessage('${msg.id}'); app.closePinnedPanel();">
           <div class="pinned-message-header">
             <img class="message-avatar" src="${avatar}" alt="">
             <span class="message-author">${this.escapeHtml(msg.displayName || msg.username)}</span>
             <span class="message-time">${this.formatTime(msg.createdAt)}</span>
-            <button class="btn-icon-tiny" onclick="event.stopPropagation(); app.unpinMessage('${msg.id}');" title="Unpin">
+            <button class="btn-icon-tiny unpin-btn" onclick="event.stopPropagation(); app.unpinMessage('${msg.id}');" title="Unpin">
               <i class="fas fa-times"></i>
             </button>
           </div>
@@ -3314,14 +4940,13 @@ class ChatApp {
   }
 
   handleMessageUnpinned(data) {
-    this.showToast('A message was unpinned', 'info');
     if (this.pinnedElements.panel?.classList.contains('active')) {
       this.loadPinnedMessages();
     }
   }
 
   // ============================================
-  // USERS
+  // USERS & ADMIN PANEL
   // ============================================
   updateUsersList() {
     const container = this.sidebarElements.usersList;
@@ -3330,13 +4955,18 @@ class ChatApp {
     const sortedUsers = Array.from(this.onlineUsers.values()).sort((a, b) => {
       if (a.id === this.user?.id) return -1;
       if (b.id === this.user?.id) return 1;
+      
+      const roleOrder = { master: 0, admin: 1, moderator: 2, member: 3 };
+      const roleDiff = (roleOrder[a.role] || 3) - (roleOrder[b.role] || 3);
+      if (roleDiff !== 0) return roleDiff;
+      
       const statusOrder = { online: 0, away: 1, dnd: 2, invisible: 3, offline: 4 };
-      return (statusOrder[a.status] || 4) - (statusOrder[b.status] || 4);
+      return (statusOrder[a.status] || 0) - (statusOrder[b.status] || 0);
     });
 
     container.innerHTML = sortedUsers.map(user => {
       const displayName = user.displayName || user.username;
-      const avatar = user.avatar || this.generateDefaultAvatar(user.username);
+      const avatar = user.avatar || this.avatarService.generateDefault(user.username);
       const isYou = user.id === this.user?.id;
 
       return `
@@ -3345,8 +4975,13 @@ class ChatApp {
             <img class="user-avatar" src="${avatar}" alt="">
             <span class="status-dot ${user.status || 'online'}"></span>
           </div>
-          <span class="user-name">${this.escapeHtml(displayName)}</span>
-          ${isYou ? '<span class="you-badge">you</span>' : ''}
+          <div class="user-info">
+            <span class="user-name">
+              ${this.escapeHtml(displayName)}
+              ${this.getRoleBadgeHtml(user.role)}
+            </span>
+            ${isYou ? '<span class="you-badge">you</span>' : ''}
+          </div>
         </div>
       `;
     }).join('');
@@ -3354,6 +4989,14 @@ class ChatApp {
     container.querySelectorAll('.user-item').forEach(item => {
       item.addEventListener('click', () => {
         this.openUserProfile(item.dataset.userId);
+      });
+
+      // Right-click for admin actions
+      item.addEventListener('contextmenu', (e) => {
+        if (this.adminService.canManageUser(item.dataset.userId)) {
+          e.preventDefault();
+          this.showUserContextMenu(e, item.dataset.userId);
+        }
       });
     });
 
@@ -3365,6 +5008,210 @@ class ChatApp {
     }
   }
 
+  showUserContextMenu(event, userId) {
+    const user = this.onlineUsers.get(userId);
+    if (!user) return;
+
+    let menu = document.getElementById('user-context-menu');
+    if (!menu) {
+      menu = document.createElement('div');
+      menu.id = 'user-context-menu';
+      menu.className = 'context-menu';
+      document.body.appendChild(menu);
+    }
+
+    const isMaster = this.adminService.isMaster();
+    const isAdmin = this.user?.role === CONFIG.USER_ROLES.ADMIN;
+
+    menu.innerHTML = `
+      <div class="context-menu-header">${this.escapeHtml(user.displayName || user.username)}</div>
+      <div class="context-menu-item" data-action="view-profile">
+        <i class="fas fa-user"></i> View Profile
+      </div>
+      <div class="context-menu-item" data-action="send-dm">
+        <i class="fas fa-envelope"></i> Send Message
+      </div>
+      <div class="context-menu-divider"></div>
+      <div class="context-menu-item" data-action="kick">
+        <i class="fas fa-user-slash"></i> Kick from Channel
+      </div>
+      <div class="context-menu-item" data-action="mute">
+        <i class="fas fa-volume-mute"></i> Mute
+      </div>
+      <div class="context-menu-item warning" data-action="ban-room">
+        <i class="fas fa-ban"></i> Ban from Channel
+      </div>
+      ${isMaster || isAdmin ? `
+        <div class="context-menu-divider"></div>
+        <div class="context-menu-item warning" data-action="ban-global">
+          <i class="fas fa-user-lock"></i> Ban Globally
+        </div>
+        ${isMaster ? `
+          <div class="context-menu-item" data-action="change-role">
+            <i class="fas fa-user-tag"></i> Change Role
+          </div>
+          <div class="context-menu-item danger" data-action="delete-account">
+            <i class="fas fa-user-times"></i> Delete Account
+          </div>
+        ` : ''}
+      ` : ''}
+    `;
+
+    menu.style.left = `${event.pageX}px`;
+    menu.style.top = `${event.pageY}px`;
+    menu.classList.add('active');
+
+    const handleAction = async (e) => {
+      const action = e.target.closest('.context-menu-item')?.dataset.action;
+      if (!action) return;
+
+      menu.classList.remove('active');
+
+      switch (action) {
+        case 'view-profile':
+          this.openUserProfile(userId);
+          break;
+        case 'send-dm':
+          this.openDMChat(userId);
+          break;
+        case 'kick':
+          await this.adminService.kickUserFromRoom(userId, this.currentRoom);
+          break;
+        case 'mute':
+          this.showMuteModal(userId);
+          break;
+        case 'ban-room':
+          this.showBanModal(userId, 'room');
+          break;
+        case 'ban-global':
+          this.showBanModal(userId, 'global');
+          break;
+        case 'change-role':
+          this.showChangeRoleModal(userId);
+          break;
+        case 'delete-account':
+          this.confirmDeleteUserAccount(userId);
+          break;
+      }
+    };
+
+    menu.addEventListener('click', handleAction, { once: true });
+
+    const closeMenu = (e) => {
+      if (!menu.contains(e.target)) {
+        menu.classList.remove('active');
+        document.removeEventListener('click', closeMenu);
+      }
+    };
+    setTimeout(() => document.addEventListener('click', closeMenu), 0);
+  }
+
+  showMuteModal(userId) {
+    const user = this.onlineUsers.get(userId);
+    if (!user) return;
+
+    this.showConfirmModal(
+      'Mute User',
+      `
+        <p>Mute ${this.escapeHtml(user.displayName || user.username)}?</p>
+        <select id="mute-duration-select" class="modal-select">
+          <option value="5">5 minutes</option>
+          <option value="15">15 minutes</option>
+          <option value="30">30 minutes</option>
+          <option value="60">1 hour</option>
+          <option value="1440">24 hours</option>
+        </select>
+      `,
+      async () => {
+        const duration = parseInt(document.getElementById('mute-duration-select')?.value || '15');
+        await this.adminService.muteUserInRoom(userId, this.currentRoom, duration);
+      },
+      'Mute',
+      'warning',
+      true
+    );
+  }
+
+  showBanModal(userId, type = 'room') {
+    const user = this.onlineUsers.get(userId);
+    if (!user) return;
+
+    const title = type === 'global' ? 'Ban User Globally' : 'Ban from Channel';
+
+    this.showConfirmModal(
+      title,
+      `
+        <p>Ban ${this.escapeHtml(user.displayName || user.username)}?</p>
+        <input type="text" id="ban-reason-input" class="modal-input" placeholder="Reason (optional)">
+        ${type === 'global' ? `
+          <select id="ban-duration-select" class="modal-select">
+            <option value="">Permanent</option>
+            <option value="1">1 day</option>
+            <option value="7">7 days</option>
+            <option value="30">30 days</option>
+          </select>
+        ` : ''}
+      `,
+      async () => {
+        const reason = document.getElementById('ban-reason-input')?.value || '';
+        const durationEl = document.getElementById('ban-duration-select');
+        const duration = durationEl ? (durationEl.value ? parseInt(durationEl.value) + ' days' : null) : null;
+
+        if (type === 'global') {
+          await this.adminService.banUser(userId, reason, duration);
+        } else {
+          await this.adminService.banUserFromRoom(userId, this.currentRoom, reason);
+        }
+      },
+      'Ban',
+      'danger',
+      true
+    );
+  }
+
+  showChangeRoleModal(userId) {
+    const user = this.onlineUsers.get(userId);
+    if (!user) return;
+
+    this.showConfirmModal(
+      'Change User Role',
+      `
+        <p>Change role for ${this.escapeHtml(user.displayName || user.username)}</p>
+        <select id="role-select" class="modal-select">
+          <option value="member" ${user.role === 'member' ? 'selected' : ''}>Member</option>
+          <option value="moderator" ${user.role === 'moderator' ? 'selected' : ''}>Moderator</option>
+          <option value="admin" ${user.role === 'admin' ? 'selected' : ''}>Admin</option>
+        </select>
+      `,
+      async () => {
+        const role = document.getElementById('role-select')?.value;
+        if (role) {
+          await this.adminService.setUserRole(userId, role);
+        }
+      },
+      'Change Role',
+      'primary',
+      true
+    );
+  }
+
+  confirmDeleteUserAccount(userId) {
+    const user = this.onlineUsers.get(userId);
+    if (!user) return;
+
+    this.showConfirmModal(
+      'Delete User Account',
+      `<p class="danger-text">⚠️ This action cannot be undone!</p>
+       <p>Are you sure you want to permanently delete the account of <strong>${this.escapeHtml(user.displayName || user.username)}</strong>?</p>
+       <p>All their messages, data, and settings will be removed.</p>`,
+      async () => {
+        await this.adminService.deleteUserAccount(userId);
+      },
+      'Delete Account',
+      'danger'
+    );
+  }
+
   handleUserStatusChange(data) {
     if (data.status === 'offline') {
       this.onlineUsers.delete(data.userId);
@@ -3374,7 +5221,8 @@ class ChatApp {
         username: data.username,
         displayName: data.displayName,
         avatar: data.avatar,
-        status: data.status
+        status: data.status,
+        role: data.role
       });
     }
 
@@ -3383,14 +5231,10 @@ class ChatApp {
   }
 
   async openUserProfile(userId) {
-    if (!navigator.onLine) {
-      // Try to show cached user info
-      const user = this.onlineUsers.get(userId);
-      if (user) {
-        this.showCachedUserProfile(user);
-      } else {
-        this.showToast('User profile not available offline', 'warning');
-      }
+    const user = this.onlineUsers.get(userId);
+    
+    if (!navigator.onLine && user) {
+      this.showCachedUserProfile(user);
       return;
     }
 
@@ -3400,75 +5244,67 @@ class ChatApp {
         headers: { 'Authorization': `Bearer ${this.token}` }
       });
 
-      if (!response.user) {
+      if (response.user) {
+        this.showUserProfileModal(response.user, userId);
+      } else if (user) {
+        this.showCachedUserProfile(user);
+      } else {
         this.showToast('User not found', 'error');
-        return;
       }
-
-      const user = response.user;
-      this.showUserProfileModal(user, userId);
     } catch (error) {
       console.error('Error loading user profile:', error);
-      this.showToast('Failed to load profile', 'error');
+      if (user) {
+        this.showCachedUserProfile(user);
+      } else {
+        this.showToast('Failed to load profile', 'error');
+      }
     }
   }
 
   showCachedUserProfile(user) {
-    const modal = this.modals.userProfile;
-    if (!modal) return;
-
-    const avatar = user.avatar || this.generateDefaultAvatar(user.username);
-
-    const avatarEl = modal.querySelector('.profile-avatar');
-    const statusEl = modal.querySelector('.profile-status-indicator');
-    const nameEl = modal.querySelector('.profile-name');
-    const usernameEl = modal.querySelector('.profile-username');
-    const badgeEl = modal.querySelector('.profile-status-badge');
-    const bioEl = modal.querySelector('.profile-bio');
-
-    if (avatarEl) avatarEl.src = avatar;
-    if (statusEl) statusEl.className = `profile-status-indicator ${user.status || 'offline'}`;
-    if (nameEl) nameEl.textContent = user.displayName || user.username;
-    if (usernameEl) usernameEl.textContent = `@${user.username}`;
-    if (badgeEl) {
-      badgeEl.textContent = user.status || 'Offline';
-      badgeEl.className = `profile-status-badge ${user.status || 'offline'}`;
-    }
-    if (bioEl) bioEl.textContent = user.bio || 'No bio available';
-
-    this.openModal('userProfile');
+    this.showUserProfileModal(user, user.id);
   }
 
   showUserProfileModal(user, userId) {
     const modal = this.modals.userProfile;
     if (!modal) return;
 
-    const avatar = user.avatar || this.generateDefaultAvatar(user.username);
+    const avatar = user.avatar || this.avatarService.generateDefault(user.username);
     const isOnline = this.onlineUsers.has(userId);
-    const status = isOnline ? 'online' : 'offline';
+    const status = isOnline ? (this.onlineUsers.get(userId)?.status || 'online') : 'offline';
+    const canManage = this.adminService.canManageUser(userId) && userId !== this.user?.id;
 
-    const avatarEl = modal.querySelector('.profile-avatar');
-    const statusEl = modal.querySelector('.profile-status-indicator');
-    const nameEl = modal.querySelector('.profile-name');
-    const usernameEl = modal.querySelector('.profile-username');
+    modal.querySelector('.profile-avatar').src = avatar;
+    modal.querySelector('.profile-status-indicator').className = `profile-status-indicator ${status}`;
+    modal.querySelector('.profile-name').innerHTML = `
+      ${this.escapeHtml(user.displayName || user.username)}
+      ${this.getRoleBadgeHtml(user.role)}
+    `;
+    modal.querySelector('.profile-username').textContent = `@${user.username}`;
+    
     const badgeEl = modal.querySelector('.profile-status-badge');
-    const bioEl = modal.querySelector('.profile-bio');
-    const joinedEl = modal.querySelector('.profile-joined');
-    const userIdEl = modal.querySelector('.profile-user-id');
+    badgeEl.textContent = this.getStatusText(status);
+    badgeEl.className = `profile-status-badge ${status}`;
+    
+    modal.querySelector('.profile-bio').textContent = user.bio || 'No bio yet';
+    modal.querySelector('.profile-joined').textContent = this.formatDateFull(user.createdAt);
+    modal.querySelector('.profile-user-id').textContent = user.id;
 
-    if (avatarEl) avatarEl.src = avatar;
-    if (statusEl) statusEl.className = `profile-status-indicator ${status}`;
-    if (nameEl) nameEl.textContent = user.displayName || user.username;
-    if (usernameEl) usernameEl.textContent = `@${user.username}`;
-    if (badgeEl) {
-      badgeEl.textContent = isOnline ? 'Online' : 'Offline';
-      badgeEl.className = `profile-status-badge ${status}`;
+    // Show/hide manage button
+    const manageBtn = modal.querySelector('#manage-user-btn');
+    if (manageBtn) {
+      manageBtn.style.display = canManage ? 'flex' : 'none';
+      manageBtn.dataset.userId = userId;
     }
-    if (bioEl) bioEl.textContent = user.bio || 'No bio yet';
-    if (joinedEl) joinedEl.textContent = this.formatDateFull(user.createdAt);
-    if (userIdEl) userIdEl.textContent = user.id;
 
+    this.selectedUserForAdmin = userId;
     this.openModal('userProfile');
+  }
+
+  openUserManagement() {
+    if (!this.selectedUserForAdmin) return;
+    this.closeAllModals();
+    this.showUserContextMenu({ pageX: window.innerWidth / 2, pageY: window.innerHeight / 2 }, this.selectedUserForAdmin);
   }
 
   changeStatus(status) {
@@ -3486,6 +5322,182 @@ class ChatApp {
     if (indicator) {
       indicator.className = `status-indicator ${status}`;
     }
+
+    this.showToast(`Status changed to ${this.getStatusText(status)}`, 'success');
+  }
+
+  // ============================================
+  // ADMIN PANEL
+  // ============================================
+  toggleAdminPanel() {
+    if (!this.adminService.isMaster() && this.user?.role !== CONFIG.USER_ROLES.ADMIN) {
+      this.showToast('Access denied', 'error');
+      return;
+    }
+
+    if (this.adminPanelOpen) {
+      this.closeAdminPanel();
+    } else {
+      this.openAdminPanel();
+    }
+  }
+
+  async openAdminPanel() {
+    this.adminPanelOpen = true;
+    this.adminElements.panel?.classList.add('active');
+    
+    // Load admin data
+    await this.loadAdminStats();
+    await this.loadAdminUserList();
+    await this.loadBannedUsers();
+  }
+
+  closeAdminPanel() {
+    this.adminPanelOpen = false;
+    this.adminElements.panel?.classList.remove('active');
+  }
+
+  switchAdminTab(tab) {
+    this.adminElements.tabs?.forEach(t => {
+      t.classList.toggle('active', t.dataset.tab === tab);
+    });
+
+    this.adminElements.tabContents?.forEach(content => {
+      content.classList.toggle('active', content.dataset.tab === tab);
+    });
+  }
+
+  async loadAdminStats() {
+    const stats = await this.adminService.getSystemStats();
+    if (!stats || !this.adminElements.statsContainer) return;
+
+    this.adminElements.statsContainer.innerHTML = `
+      <div class="stat-card">
+        <i class="fas fa-users"></i>
+        <div class="stat-info">
+          <span class="stat-value">${stats.totalUsers || 0}</span>
+          <span class="stat-label">Total Users</span>
+        </div>
+      </div>
+      <div class="stat-card">
+        <i class="fas fa-user-check"></i>
+        <div class="stat-info">
+          <span class="stat-value">${stats.onlineUsers || 0}</span>
+          <span class="stat-label">Online Now</span>
+        </div>
+      </div>
+      <div class="stat-card">
+        <i class="fas fa-comments"></i>
+        <div class="stat-info">
+          <span class="stat-value">${stats.totalMessages || 0}</span>
+          <span class="stat-label">Total Messages</span>
+        </div>
+      </div>
+      <div class="stat-card">
+        <i class="fas fa-hashtag"></i>
+        <div class="stat-info">
+          <span class="stat-value">${stats.totalRooms || 0}</span>
+          <span class="stat-label">Channels</span>
+        </div>
+      </div>
+      <div class="stat-card">
+        <i class="fas fa-user-slash"></i>
+        <div class="stat-info">
+          <span class="stat-value">${stats.bannedUsers || 0}</span>
+          <span class="stat-label">Banned Users</span>
+        </div>
+      </div>
+    `;
+  }
+
+  async loadAdminUserList(search = '') {
+    const result = await this.adminService.getAllUsers(1, 50, search);
+    const container = this.adminElements.userList;
+    if (!container) return;
+
+    if (!result.users || result.users.length === 0) {
+      container.innerHTML = '<p class="empty-text">No users found</p>';
+      return;
+    }
+
+    container.innerHTML = result.users.map(user => `
+      <div class="admin-user-item" data-user-id="${user.id}">
+        <img class="user-avatar" src="${user.avatar || this.avatarService.generateDefault(user.username)}" alt="">
+        <div class="admin-user-info">
+          <span class="admin-user-name">
+            ${this.escapeHtml(user.displayName || user.username)}
+            ${this.getRoleBadgeHtml(user.role)}
+          </span>
+          <span class="admin-user-email">${this.escapeHtml(user.email)}</span>
+        </div>
+        <div class="admin-user-actions">
+          <button class="btn-icon-small" onclick="app.openUserProfile('${user.id}')" title="View">
+            <i class="fas fa-eye"></i>
+          </button>
+          ${this.adminService.canManageUser(user.id) ? `
+            <button class="btn-icon-small" onclick="app.showBanModal('${user.id}', 'global')" title="Ban">
+              <i class="fas fa-ban"></i>
+            </button>
+            ${this.adminService.isMaster() ? `
+              <button class="btn-icon-small danger" onclick="app.confirmDeleteUserAccount('${user.id}')" title="Delete">
+                <i class="fas fa-trash"></i>
+              </button>
+            ` : ''}
+          ` : ''}
+        </div>
+      </div>
+    `).join('');
+  }
+
+  async loadBannedUsers() {
+    const users = await this.adminService.getBannedUsers();
+    const container = this.adminElements.bannedUsersList;
+    if (!container) return;
+
+    if (users.length === 0) {
+      container.innerHTML = '<p class="empty-text">No banned users</p>';
+      return;
+    }
+
+    container.innerHTML = users.map(user => `
+      <div class="banned-user-item" data-user-id="${user.id}">
+        <img class="user-avatar" src="${user.avatar || this.avatarService.generateDefault(user.username)}" alt="">
+        <div class="banned-user-info">
+          <span class="banned-user-name">${this.escapeHtml(user.displayName || user.username)}</span>
+          <span class="banned-user-reason">${user.banReason || 'No reason provided'}</span>
+          ${user.banExpires ? `<span class="banned-user-expires">Expires: ${this.formatDateFull(user.banExpires)}</span>` : '<span class="banned-user-expires">Permanent</span>'}
+        </div>
+        <button class="btn-small btn-success" onclick="app.unbanUser('${user.id}')">
+          <i class="fas fa-user-check"></i> Unban
+        </button>
+      </div>
+    `).join('');
+  }
+
+  async unbanUser(userId) {
+    const success = await this.adminService.unbanUser(userId);
+    if (success) {
+      this.loadBannedUsers();
+    }
+  }
+
+  searchUsersAdmin(query) {
+    this.loadAdminUserList(query);
+  }
+
+  async sendAnnouncement() {
+    const input = this.adminElements.announcementInput;
+    const message = input?.value?.trim();
+
+    if (!message) {
+      this.showToast('Please enter an announcement message', 'warning');
+      return;
+    }
+
+    const success = await this.adminService.sendSystemAnnouncement(message);
+    if (success && input) {
+      input.value = '';
+    }
   }
 
   // ============================================
@@ -3500,7 +5512,6 @@ class ChatApp {
     }
 
     if (!navigator.onLine) {
-      // Search in cached messages
       this.searchCachedMessages(query);
       return;
     }
@@ -3519,7 +5530,6 @@ class ChatApp {
       }
     } catch (error) {
       console.error('Search error:', error);
-      // Fall back to cached search
       this.searchCachedMessages(query);
     }
   }
@@ -3548,6 +5558,9 @@ class ChatApp {
     const first = document.querySelector('.message.search-result');
     if (first) {
       first.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      this.showToast(`Found ${messages.length} result(s)`, 'info');
+    } else {
+      this.showToast('No results found', 'info');
     }
   }
 
@@ -3557,27 +5570,32 @@ class ChatApp {
   showContextMenu(event, messageEl) {
     this.contextMenuTarget = messageEl;
     const userId = messageEl.dataset.userId;
+    const messageId = messageEl.dataset.messageId;
     const isOwn = userId === this.user?.id;
     const isPending = messageEl.classList.contains('pending');
+    const canModerate = this.adminService.isRoomModerator(this.currentRoom);
 
-    const editItem = this.contextMenu?.querySelector('[data-action="edit"]');
-    const deleteItem = this.contextMenu?.querySelector('[data-action="delete"]');
-    const replyItem = this.contextMenu?.querySelector('[data-action="reply"]');
-    const reactItem = this.contextMenu?.querySelector('[data-action="react"]');
-    const pinItem = this.contextMenu?.querySelector('[data-action="pin"]');
+    const menu = this.contextMenu;
+    if (!menu) return;
 
-    // Hide actions for pending messages
-    if (editItem) editItem.style.display = isOwn && !isPending ? 'flex' : 'none';
-    if (deleteItem) deleteItem.style.display = isOwn && !isPending ? 'flex' : 'none';
-    if (replyItem) replyItem.style.display = !isPending ? 'flex' : 'none';
-    if (reactItem) reactItem.style.display = !isPending ? 'flex' : 'none';
-    if (pinItem) pinItem.style.display = !isPending ? 'flex' : 'none';
+    // Update menu items visibility
+    menu.querySelectorAll('[data-action="edit"], [data-action="delete"]').forEach(el => {
+      el.style.display = isOwn && !isPending ? 'flex' : 'none';
+    });
 
-    if (this.contextMenu) {
-      this.contextMenu.style.left = `${event.pageX}px`;
-      this.contextMenu.style.top = `${event.pageY}px`;
-      this.contextMenu.classList.add('active');
+    menu.querySelectorAll('[data-action="reply"], [data-action="react"], [data-action="pin"], [data-action="thread"]').forEach(el => {
+      el.style.display = !isPending ? 'flex' : 'none';
+    });
+
+    // Admin actions
+    const adminSection = menu.querySelector('.admin-actions');
+    if (adminSection) {
+      adminSection.style.display = canModerate && !isOwn ? 'block' : 'none';
     }
+
+    menu.style.left = `${event.pageX}px`;
+    menu.style.top = `${event.pageY}px`;
+    menu.classList.add('active');
   }
 
   hideContextMenu() {
@@ -3589,6 +5607,7 @@ class ChatApp {
     if (!this.contextMenuTarget) return;
 
     const messageId = this.contextMenuTarget.dataset.messageId;
+    const userId = this.contextMenuTarget.dataset.userId;
 
     switch (action) {
       case 'reply':
@@ -3612,7 +5631,7 @@ class ChatApp {
         }
         break;
       case 'copy-link':
-        const link = `${window.location.origin}#message-${messageId}`;
+        const link = `${window.location.origin}/${this.currentRoom}?message=${messageId}`;
         navigator.clipboard.writeText(link).then(() => {
           this.showToast('Link copied', 'success');
         });
@@ -3622,6 +5641,21 @@ class ChatApp {
         break;
       case 'delete':
         this.deleteMessage(messageId);
+        break;
+      case 'admin-delete':
+        this.adminDeleteMessage(messageId);
+        break;
+      case 'warn-user':
+        this.showToast('Warning sent to user', 'success');
+        break;
+      case 'mute-user':
+        this.showMuteModal(userId);
+        break;
+      case 'kick-user':
+        this.adminService.kickUserFromRoom(userId, this.currentRoom);
+        break;
+      case 'ban-user':
+        this.showBanModal(userId, 'room');
         break;
     }
 
@@ -3635,6 +5669,17 @@ class ChatApp {
     if (window.innerWidth > 768 && this.sidebarCollapsed) {
       this.sidebarElements.sidebar?.classList.add('collapsed');
       this.updateSidebarToggleIcon();
+    }
+
+    // Show admin button if user is admin/master
+    this.updateAdminButtonVisibility();
+  }
+
+  updateAdminButtonVisibility() {
+    const btn = this.sidebarElements.adminPanelBtn;
+    if (btn) {
+      const showAdmin = this.adminService.isMaster() || this.user?.role === CONFIG.USER_ROLES.ADMIN;
+      btn.style.display = showAdmin ? 'flex' : 'none';
     }
   }
 
@@ -3661,11 +5706,7 @@ class ChatApp {
   }
 
   toggleMobileSidebar() {
-    if (this.sidebarOpen) {
-      this.closeMobileSidebar();
-    } else {
-      this.openMobileSidebar();
-    }
+    this.sidebarOpen ? this.closeMobileSidebar() : this.openMobileSidebar();
   }
 
   openMobileSidebar() {
@@ -3691,6 +5732,17 @@ class ChatApp {
     }
   }
 
+  closeAllPanels() {
+    this.closeAllModals();
+    this.closeThreadPanel();
+    this.closePinnedPanel();
+    this.closeAdminPanel();
+    this.closeDMChat();
+    this.hideContextMenu();
+    this.hideMentionDropdown();
+    this.chatElements.emojiPicker?.classList.remove('active');
+  }
+
   // ============================================
   // SETTINGS
   // ============================================
@@ -3704,30 +5756,72 @@ class ChatApp {
       }
     }
 
+    // Apply settings
+    this.applySettings();
+  }
+
+  applySettings() {
+    // Apply to UI elements
     if (this.settingsModalElements.soundToggle) {
       this.settingsModalElements.soundToggle.checked = this.settings.soundEnabled;
     }
     if (this.settingsModalElements.desktopNotificationsToggle) {
       this.settingsModalElements.desktopNotificationsToggle.checked = this.settings.desktopNotifications;
     }
+    if (this.settingsModalElements.messageAlignmentSelect) {
+      this.settingsModalElements.messageAlignmentSelect.value = this.settings.messageAlignment;
+    }
+    if (this.settingsModalElements.enterToSendToggle) {
+      this.settingsModalElements.enterToSendToggle.checked = this.settings.enterToSend;
+    }
+    if (this.settingsModalElements.showAvatarsToggle) {
+      this.settingsModalElements.showAvatarsToggle.checked = this.settings.showAvatars;
+    }
+    if (this.settingsModalElements.timestampsToggle) {
+      this.settingsModalElements.timestampsToggle.checked = this.settings.showTimestamps;
+    }
+    if (this.settingsModalElements.animationsToggle) {
+      this.settingsModalElements.animationsToggle.checked = this.settings.animationsEnabled;
+    }
+    if (this.settingsModalElements.compactModeToggle) {
+      this.settingsModalElements.compactModeToggle.checked = this.settings.compactMode;
+    }
+
+    // Apply compact mode
+    document.body.classList.toggle('compact-mode', this.settings.compactMode);
+    
+    // Apply animations
+    document.body.classList.toggle('no-animations', !this.settings.animationsEnabled);
+
+    // Apply font size
+    document.documentElement.dataset.fontSize = this.settings.fontSize;
   }
 
   async saveSettings() {
+    // Gather settings from UI
     const displayName = this.settingsModalElements.displayName?.value.trim();
     const bio = this.settingsModalElements.bio?.value.trim();
     const theme = this.settingsModalElements.themeSelect?.value;
-    const soundEnabled = this.settingsModalElements.soundToggle?.checked;
-    const desktopNotifications = this.settingsModalElements.desktopNotificationsToggle?.checked;
+    
+    this.settings.soundEnabled = this.settingsModalElements.soundToggle?.checked ?? true;
+    this.settings.desktopNotifications = this.settingsModalElements.desktopNotificationsToggle?.checked ?? false;
+    this.settings.messageAlignment = this.settingsModalElements.messageAlignmentSelect?.value || 'right';
+    this.settings.enterToSend = this.settingsModalElements.enterToSendToggle?.checked ?? true;
+    this.settings.showAvatars = this.settingsModalElements.showAvatarsToggle?.checked ?? true;
+    this.settings.showTimestamps = this.settingsModalElements.timestampsToggle?.checked ?? true;
+    this.settings.animationsEnabled = this.settingsModalElements.animationsToggle?.checked ?? true;
+    this.settings.compactMode = this.settingsModalElements.compactModeToggle?.checked ?? false;
+    this.settings.fontSize = this.settingsModalElements.fontSizeSelect?.value || 'medium';
 
-    // Save local settings regardless of online status
-    this.settings.soundEnabled = soundEnabled;
-    this.settings.desktopNotifications = desktopNotifications;
+    // Save locally
     localStorage.setItem('chatSettings', JSON.stringify(this.settings));
     this.setTheme(theme);
+    this.applySettings();
+    this.applyMessageAlignment();
 
     if (!navigator.onLine) {
       this.closeAllModals();
-      this.showToast('Settings saved locally - will sync when online', 'info');
+      this.showToast('Settings saved locally', 'success');
       return;
     }
 
@@ -3739,20 +5833,18 @@ class ChatApp {
           displayName,
           bio,
           theme,
-          notificationSound: soundEnabled,
-          desktopNotifications
+          settings: this.settings
         })
       });
 
       if (response.success) {
         this.user = response.user;
         localStorage.setItem('cachedUser', JSON.stringify(response.user));
-
         this.updateUI();
         this.closeAllModals();
         this.showToast('Settings saved', 'success');
 
-        if (desktopNotifications && 'Notification' in window) {
+        if (this.settings.desktopNotifications && 'Notification' in window) {
           Notification.requestPermission();
         }
       } else {
@@ -3760,43 +5852,8 @@ class ChatApp {
       }
     } catch (error) {
       console.error('Save settings error:', error);
-      this.showToast('Settings saved locally - will sync when online', 'warning');
+      this.showToast('Settings saved locally', 'warning');
       this.closeAllModals();
-    }
-  }
-
-  async uploadAvatar(event) {
-    const file = event.target.files?.[0];
-    if (!file) return;
-
-    if (!navigator.onLine) {
-      this.showToast('Cannot upload avatar while offline', 'error');
-      return;
-    }
-
-    const formData = new FormData();
-    formData.append('avatar', file);
-
-    try {
-      const response = await fetch('/api/users/avatar', {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${this.token}` },
-        body: formData
-      });
-
-      const data = await response.json();
-
-      if (response.ok && data.success) {
-        this.user.avatar = data.avatar;
-        localStorage.setItem('cachedUser', JSON.stringify(this.user));
-        this.updateUI();
-        this.showToast('Avatar updated', 'success');
-      } else {
-        this.showToast(data.error || 'Failed to upload avatar', 'error');
-      }
-    } catch (error) {
-      console.error('Avatar upload error:', error);
-      this.showToast('Failed to upload avatar', 'error');
     }
   }
 
@@ -3812,7 +5869,7 @@ class ChatApp {
   }
 
   // ============================================
-  // THEME
+  // THEME (15 THEMES)
   // ============================================
   initTheme() {
     const saved = localStorage.getItem('chatTheme') || 'dark';
@@ -3821,13 +5878,17 @@ class ChatApp {
 
   toggleTheme() {
     const current = document.documentElement.dataset.theme;
-    const themes = ['dark', 'light', 'midnight', 'nature', 'sunset'];
-    const currentIndex = themes.indexOf(current);
-    const nextIndex = (currentIndex + 1) % themes.length;
-    this.setTheme(themes[nextIndex]);
+    const currentIndex = CONFIG.THEMES.indexOf(current);
+    const nextIndex = (currentIndex + 1) % CONFIG.THEMES.length;
+    this.setTheme(CONFIG.THEMES[nextIndex]);
+    this.showToast(`Theme: ${CONFIG.THEMES[nextIndex]}`, 'info');
   }
 
   setTheme(theme) {
+    if (!CONFIG.THEMES.includes(theme)) {
+      theme = 'dark';
+    }
+    
     document.documentElement.dataset.theme = theme;
     localStorage.setItem('chatTheme', theme);
 
@@ -3838,7 +5899,17 @@ class ChatApp {
         light: 'fa-sun',
         midnight: 'fa-star',
         nature: 'fa-leaf',
-        sunset: 'fa-cloud-sun'
+        sunset: 'fa-cloud-sun',
+        ocean: 'fa-water',
+        forest: 'fa-tree',
+        cherry: 'fa-heart',
+        cyberpunk: 'fa-robot',
+        lavender: 'fa-spa',
+        mocha: 'fa-coffee',
+        arctic: 'fa-snowflake',
+        volcano: 'fa-fire',
+        galaxy: 'fa-meteor',
+        retro: 'fa-gamepad'
       };
       icon.className = `fas ${icons[theme] || 'fa-moon'}`;
     }
@@ -3853,14 +5924,15 @@ class ChatApp {
   // ============================================
   initEmojiData() {
     return {
-      smileys: ['😀', '😃', '😄', '😁', '😅', '😂', '🤣', '😊', '😇', '🙂', '🙃', '😉', '😌', '😍', '🥰', '😘', '😗', '😙', '😚', '😋', '😛', '😝', '😜', '🤪', '🤨', '🧐', '🤓', '😎', '🤩', '🥳', '😏', '😒', '😞', '😔', '😟', '😕', '🙁', '☹️', '😣', '😖', '😫', '😩', '🥺', '😢', '😭', '😤', '😠', '😡', '🤬', '🤯', '😳', '🥵', '🥶', '😱', '😨', '😰', '😥', '😓', '🤗', '🤔', '🤭', '🤫', '🤥', '😶', '😐', '😑', '😬', '🙄', '😯', '😦', '😧', '😮', '😲', '🥱', '😴', '🤤', '😪', '😵', '🤐', '🥴', '🤢', '🤮', '🤧', '😷', '🤒', '🤕', '🤑', '🤠'],
-      people: ['👋', '🤚', '🖐', '✋', '🖖', '👌', '🤌', '🤏', '✌️', '🤞', '🤟', '🤘', '🤙', '👈', '👉', '👆', '🖕', '👇', '☝️', '👍', '👎', '✊', '👊', '🤛', '🤜', '👏', '🙌', '👐', '🤲', '🤝', '🙏', '✍️', '💅', '🤳', '💪'],
-      animals: ['🐶', '🐱', '🐭', '🐹', '🐰', '🦊', '🐻', '🐼', '🐨', '🐯', '🦁', '🐮', '🐷', '🐸', '🐵', '🙈', '🙉', '🙊', '🐒', '🐔', '🐧', '🐦', '🐤', '🦆', '🦅', '🦉', '🦇', '🐺', '🐗', '🐴', '🦄', '🐝', '🐛', '🦋', '🐌', '🐞'],
-      food: ['🍏', '🍎', '🍐', '🍊', '🍋', '🍌', '🍉', '🍇', '🍓', '🫐', '🍈', '🍒', '🍑', '🥭', '🍍', '🥥', '🥝', '🍅', '🍆', '🥑', '🥦', '🥬', '🥒', '🌶', '🫑', '🌽', '🥕', '🫒', '🧄', '🧅', '🥔', '🍠', '🥐', '🥯', '🍞', '🥖', '🥨', '🧀', '🥚', '🍳', '🧈', '🥞', '🧇', '🥓', '🥩', '🍗', '🍖', '🌭', '🍔', '🍟', '🍕'],
-      activities: ['⚽', '🏀', '🏈', '⚾', '🥎', '🎾', '🏐', '🏉', '🥏', '🎱', '🏓', '🏸', '🏒', '🏑', '🥍', '🏏', '🥅', '⛳', '🏹', '🎣', '🥊', '🥋', '🎽', '🛹', '🛷', '⛸', '🥌', '🎿', '⛷', '🏂'],
-      travel: ['🚗', '🚕', '🚙', '🚌', '🚎', '🏎', '🚓', '🚑', '🚒', '🚐', '🛻', '🚚', '🚛', '🚜', '🛴', '🚲', '🛵', '🏍', '✈️', '🚀', '🛸', '🚁', '🛶', '⛵', '🚤', '🛥', '🛳', '⛴', '🚢'],
-      objects: ['⌚', '📱', '📲', '💻', '⌨️', '🖥', '🖨', '🖱', '🖲', '💽', '💾', '💿', '📀', '📷', '📸', '📹', '🎥', '📽', '📞', '☎️', '📟', '📠', '📺', '📻', '🎙', '🎚', '🎛', '⏱', '⏲', '⏰', '🕰', '⌛', '⏳', '📡', '🔋', '🔌', '💡', '🔦', '🕯'],
-      symbols: ['❤️', '🧡', '💛', '💚', '💙', '💜', '🖤', '🤍', '🤎', '💔', '❣️', '💕', '💞', '💓', '💗', '💖', '💘', '💝', '💟', '☮️', '✝️', '☪️', '🕉', '☸️', '✡️', '🔯', '🕎', '☯️', '☦️', '🛐', '⛎', '♈', '♉', '♊', '♋', '♌', '♍', '♎', '♏', '♐', '♑', '♒', '♓', '🆔', '⚛️']
+      smileys: ['😀', '😃', '😄', '😁', '😅', '😂', '🤣', '😊', '😇', '🙂', '🙃', '😉', '😌', '😍', '🥰', '😘', '😗', '😙', '😚', '😋', '😛', '😝', '😜', '🤪', '🤨', '🧐', '🤓', '😎', '🤩', '🥳', '😏', '😒', '😞', '😔', '😟', '😕', '🙁', '☹️', '😣', '😖', '😫', '😩', '🥺', '😢', '😭', '😤', '😠', '😡', '🤬', '🤯', '😳', '🥵', '🥶', '😱', '😨', '😰', '😥', '😓', '🤗', '🤔', '🤭', '🤫', '🤥', '😶', '😐', '😑', '😬', '🙄', '😯', '😦', '😧', '😮', '😲', '🥱', '😴', '🤤', '😪', '😵', '🤐', '🥴', '🤢', '🤮', '🤧', '😷', '🤒', '🤕', '🤑', '🤠', '💀', '👻', '👽', '🤖', '💩', '😺', '😸', '😹', '😻', '😼', '😽', '🙀', '😿', '😾'],
+      people: ['👋', '🤚', '🖐', '✋', '🖖', '👌', '🤌', '🤏', '✌️', '🤞', '🤟', '🤘', '🤙', '👈', '👉', '👆', '🖕', '👇', '☝️', '👍', '👎', '✊', '👊', '🤛', '🤜', '👏', '🙌', '👐', '🤲', '🤝', '🙏', '✍️', '💅', '🤳', '💪', '🦾', '🦿', '🦵', '🦶', '👂', '🦻', '👃', '🧠', '🫀', '🫁', '🦷', '🦴', '👀', '👁', '👅', '👄', '👶', '🧒', '👦', '👧', '🧑', '👱', '👨', '🧔', '👩', '🧓', '👴', '👵'],
+      animals: ['🐶', '🐱', '🐭', '🐹', '🐰', '🦊', '🐻', '🐼', '🐻‍❄️', '🐨', '🐯', '🦁', '🐮', '🐷', '🐸', '🐵', '🙈', '🙉', '🙊', '🐒', '🐔', '🐧', '🐦', '🐤', '🦆', '🦅', '🦉', '🦇', '🐺', '🐗', '🐴', '🦄', '🐝', '🪲', '🐛', '🦋', '🐌', '🐞', '🐜', '🪰', '🪱', '🦟', '🦗', '🕷', '🦂', '🐢', '🐍', '🦎', '🦖', '🦕', '🐙', '🦑', '🦐', '🦞', '🦀', '🐡', '🐠', '🐟', '🐬', '🐳', '🐋', '🦈', '🐊', '🐅', '🐆', '🦓', '🦍', '🦧', '🦣', '🐘', '🦛', '🦏', '🐪', '🐫', '🦒', '🦘', '🦬', '🐃', '🐂', '🐄', '🐎', '🐖', '🐏', '🐑', '🦙', '🐐', '🦌', '🐕', '🐩', '🦮', '🐕‍🦺', '🐈', '🐈‍⬛', '🪶', '🐓', '🦃', '🦤', '🦚', '🦜', '🦢', '🦩', '🕊', '🐇', '🦝', '🦨', '🦡', '🦫', '🦦', '🦥', '🐁', '🐀', '🐿', '🦔'],
+      food: ['🍏', '🍎', '🍐', '🍊', '🍋', '🍌', '🍉', '🍇', '🍓', '🫐', '🍈', '🍒', '🍑', '🥭', '🍍', '🥥', '🥝', '🍅', '🍆', '🥑', '🥦', '🥬', '🥒', '🌶', '🫑', '🌽', '🥕', '🫒', '🧄', '🧅', '🥔', '🍠', '🥐', '🥯', '🍞', '🥖', '🥨', '🧀', '🥚', '🍳', '🧈', '🥞', '🧇', '🥓', '🥩', '🍗', '🍖', '🌭', '🍔', '🍟', '🍕', '🫓', '🥪', '🥙', '🧆', '🌮', '🌯', '🫔', '🥗', '🥘', '🫕', '🥫', '🍝', '🍜', '🍲', '🍛', '🍣', '🍱', '🥟', '🦪', '🍤', '🍙', '🍚', '🍘', '🍥', '🥠', '🥮', '🍢', '🍡', '🍧', '🍨', '🍦', '🥧', '🧁', '🍰', '🎂', '🍮', '🍭', '🍬', '🍫', '🍿', '🍩', '🍪', '🌰', '🥜', '🍯', '🥛', '🍼', '🫖', '☕', '🍵', '🧃', '🥤', '🧋', '🍶', '🍺', '🍻', '🥂', '🍷', '🥃', '🍸', '🍹', '🧉', '🍾', '🧊'],
+      activities: ['⚽', '🏀', '🏈', '⚾', '🥎', '🎾', '🏐', '🏉', '🥏', '🎱', '🪀', '🏓', '🏸', '🏒', '🏑', '🥍', '🏏', '🪃', '🥅', '⛳', '🪁', '🏹', '🎣', '🤿', '🥊', '🥋', '🎽', '🛹', '🛼', '🛷', '⛸', '🥌', '🎿', '⛷', '🏂', '🪂', '🏋️', '🤼', '🤸', '🤺', '⛹️', '🤾', '🏌️', '🏇', '🧘', '🏄', '🏊', '🤽', '🚣', '🧗', '🚵', '🚴', '🏆', '🥇', '🥈', '🥉', '🏅', '🎖', '🏵', '🎗', '🎫', '🎟', '🎪', '🤹', '🎭', '🩰', '🎨', '🎬', '🎤', '🎧', '🎼', '🎹', '🥁', '🪘', '🎷', '🎺', '🪗', '🎸', '🪕', '🎻', '🎲', '♟', '🎯', '🎳', '🎮', '🎰', '🧩'],
+      travel: ['🚗', '🚕', '🚙', '🚌', '🚎', '🏎', '🚓', '🚑', '🚒', '🚐', '🛻', '🚚', '🚛', '🚜', '🦯', '🦽', '🦼', '🛴', '🚲', '🛵', '🏍', '🛺', '🚨', '🚔', '🚍', '🚘', '🚖', '🚡', '🚠', '🚟', '🚃', '🚋', '🚞', '🚝', '🚄', '🚅', '🚈', '🚂', '🚆', '🚇', '🚊', '🚉', '✈️', '🛫', '🛬', '🛩', '💺', '🛰', '🚀', '🛸', '🚁', '🛶', '⛵', '🚤', '🛥', '🛳', '⛴', '🚢', '⚓', '🪝', '⛽', '🚧', '🚦', '🚥', '🚏', '🗺', '🗿', '🗽', '🗼', '🏰', '🏯', '🏟', '🎡', '🎢', '🎠', '⛲', '⛱', '🏖', '🏝', '🏜', '🌋', '⛰', '🏔', '🗻', '🏕', '⛺', '🏠', '🏡', '🏘', '🏚', '🏗', '🏭', '🏢', '🏬', '🏣', '🏤', '🏥', '🏦', '🏨', '🏪', '🏫', '🏩', '💒', '🏛', '⛪', '🕌', '🕍', '🛕', '🕋', '⛩', '🛤', '🛣', '🗾', '🎑', '🏞', '🌅', '🌄', '🌠', '🎇', '🎆', '🌇', '🌆', '🏙', '🌃', '🌌', '🌉', '🌁'],
+      objects: ['⌚', '📱', '📲', '💻', '⌨️', '🖥', '🖨', '🖱', '🖲', '🕹', '🗜', '💽', '💾', '💿', '📀', '📼', '📷', '📸', '📹', '🎥', '📽', '🎞', '📞', '☎️', '📟', '📠', '📺', '📻', '🎙', '🎚', '🎛', '🧭', '⏱', '⏲', '⏰', '🕰', '⌛', '⏳', '📡', '🔋', '🔌', '💡', '🔦', '🕯', '🪔', '🧯', '🛢', '💸', '💵', '💴', '💶', '💷', '🪙', '💰', '💳', '💎', '⚖️', '🪜', '🧰', '🪛', '🔧', '🔨', '⚒', '🛠', '⛏', '🪚', '🔩', '⚙️', '🪤', '🧱', '⛓', '🧲', '🔫', '💣', '🧨', '🪓', '🔪', '🗡', '⚔️', '🛡', '🚬', '⚰️', '🪦', '⚱️', '🏺', '🔮', '📿', '🧿', '💈', '⚗️', '🔭', '🔬', '🕳', '🩹', '🩺', '💊', '💉', '🩸', '🧬', '🦠', '🧫', '🧪', '🌡', '🧹', '🪠', '🧺', '🧻', '🚽', '🚰', '🚿', '🛁', '🛀', '🧼', '🪥', '🪒', '🧽', '🪣', '🧴', '🛎', '🔑', '🗝', '🚪', '🪑', '🛋', '🛏', '🛌', '🧸', '🪆', '🖼', '🪞', '🪟', '🛍', '🛒', '🎁', '🎈', '🎏', '🎀', '🪄', '🪅', '🎊', '🎉', '🎎', '🏮', '🎐', '🧧', '✉️', '📩', '📨', '📧', '💌', '📥', '📤', '📦', '🏷', '🪧', '📪', '📫', '📬', '📭', '📮', '📯', '📜', '📃', '📄', '📑', '🧾', '📊', '📈', '📉', '🗒', '🗓', '📆', '📅', '🗑', '📇', '🗃', '🗳', '🗄', '📋', '📁', '📂', '🗂', '🗞', '📰', '📓', '📔', '📒', '📕', '📗', '📘', '📙', '📚', '📖', '🔖', '🧷', '🔗', '📎', '🖇', '📐', '📏', '🧮', '📌', '📍', '✂️', '🖊', '🖋', '✒️', '🖌', '🖍', '📝', '✏️', '🔍', '🔎', '🔏', '🔐', '🔒', '🔓'],
+      symbols: ['❤️', '🧡', '💛', '💚', '💙', '💜', '🖤', '🤍', '🤎', '💔', '❣️', '💕', '💞', '💓', '💗', '💖', '💘', '💝', '💟', '☮️', '✝️', '☪️', '🕉', '☸️', '✡️', '🔯', '🕎', '☯️', '☦️', '🛐', '⛎', '♈', '♉', '♊', '♋', '♌', '♍', '♎', '♏', '♐', '♑', '♒', '♓', '🆔', '⚛️', '🉑', '☢️', '☣️', '📴', '📳', '🈶', '🈚', '🈸', '🈺', '🈷️', '✴️', '🆚', '💮', '🉐', '㊙️', '㊗️', '🈴', '🈵', '🈹', '🈲', '🅰️', '🅱️', '🆎', '🆑', '🅾️', '🆘', '❌', '⭕', '🛑', '⛔', '📛', '🚫', '💯', '💢', '♨️', '🚷', '🚯', '🚳', '🚱', '🔞', '📵', '🚭', '❗', '❕', '❓', '❔', '‼️', '⁉️', '🔅', '🔆', '〽️', '⚠️', '🚸', '🔱', '⚜️', '🔰', '♻️', '✅', '🈯', '💹', '❇️', '✳️', '❎', '🌐', '💠', 'Ⓜ️', '🌀', '💤', '🏧', '🚾', '♿', '🅿️', '🛗', '🈳', '🈂️', '🛂', '🛃', '🛄', '🛅', '🚹', '🚺', '🚼', '⚧', '🚻', '🚮', '🎦', '📶', '🈁', '🔣', 'ℹ️', '🔤', '🔡', '🔠', '🆖', '🆗', '🆙', '🆒', '🆕', '🆓', '0️⃣', '1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣', '🔟', '🔢', '#️⃣', '*️⃣', '⏏️', '▶️', '⏸', '⏯', '⏹', '⏺', '⏭', '⏮', '⏩', '⏪', '⏫', '⏬', '◀️', '🔼', '🔽', '➡️', '⬅️', '⬆️', '⬇️', '↗️', '↘️', '↙️', '↖️', '↕️', '↔️', '↪️', '↩️', '⤴️', '⤵️', '🔀', '🔁', '🔂', '🔄', '🔃', '🎵', '🎶', '➕', '➖', '➗', '✖️', '🟰', '♾', '💲', '💱', '™️', '©️', '®️', '〰️', '➰', '➿', '🔚', '🔙', '🔛', '🔝', '🔜', '✔️', '☑️', '🔘', '🔴', '🟠', '🟡', '🟢', '🔵', '🟣', '⚫', '⚪', '🟤', '🔺', '🔻', '🔸', '🔹', '🔶', '🔷', '🔳', '🔲', '▪️', '▫️', '◾', '◽', '◼️', '◻️', '🟥', '🟧', '🟨', '🟩', '🟦', '🟪', '⬛', '⬜', '🟫', '🔈', '🔇', '🔉', '🔊', '🔔', '🔕', '📣', '📢', '👁‍🗨', '💬', '💭', '🗯', '♠️', '♣️', '♥️', '♦️', '🃏', '🎴', '🀄', '🕐', '🕑', '🕒', '🕓', '🕔', '🕕', '🕖', '🕗', '🕘', '🕙', '🕚', '🕛', '🕜', '🕝', '🕞', '🕟', '🕠', '🕡', '🕢', '🕣', '🕤', '🕥', '🕦', '🕧'],
+      flags: ['🏳️', '🏴', '🏴‍☠️', '🏁', '🚩', '🎌', '🏳️‍🌈', '🏳️‍⚧️', '🇺🇳', '🇦🇫', '🇦🇱', '🇩🇿', '🇦🇸', '🇦🇩', '🇦🇴', '🇦🇮', '🇦🇶', '🇦🇬', '🇦🇷', '🇦🇲', '🇦🇼', '🇦🇺', '🇦🇹', '🇦🇿', '🇧🇸', '🇧🇭', '🇧🇩', '🇧🇧', '🇧🇾', '🇧🇪', '🇧🇿', '🇧🇯', '🇧🇲', '🇧🇹', '🇧🇴', '🇧🇦', '🇧🇼', '🇧🇷', '🇮🇴', '🇻🇬', '🇧🇳', '🇧🇬', '🇧🇫', '🇧🇮', '🇰🇭', '🇨🇲', '🇨🇦', '🇮🇨', '🇨🇻', '🇧🇶', '🇰🇾', '🇨🇫', '🇹🇩', '🇨🇱', '🇨🇳', '🇨🇽', '🇨🇨', '🇨🇴', '🇰🇲', '🇨🇬', '🇨🇩', '🇨🇰', '🇨🇷', '🇨🇮', '🇭🇷', '🇨🇺', '🇨🇼', '🇨🇾', '🇨🇿', '🇩🇰', '🇩🇯', '🇩🇲', '🇩🇴', '🇪🇨', '🇪🇬', '🇸🇻', '🇬🇶', '🇪🇷', '🇪🇪', '🇸🇿', '🇪🇹', '🇪🇺', '🇫🇰', '🇫🇴', '🇫🇯', '🇫🇮', '🇫🇷', '🇬🇫', '🇵🇫', '🇹🇫', '🇬🇦', '🇬🇲', '🇬🇪', '🇩🇪', '🇬🇭', '🇬🇮', '🇬🇷', '🇬🇱', '🇬🇩', '🇬🇵', '🇬🇺', '🇬🇹', '🇬🇬', '🇬🇳', '🇬🇼', '🇬🇾', '🇭🇹', '🇭🇳', '🇭🇰', '🇭🇺', '🇮🇸', '🇮🇳', '🇮🇩', '🇮🇷', '🇮🇶', '🇮🇪', '🇮🇲', '🇮🇱', '🇮🇹', '🇯🇲', '🇯🇵', '🎌', '🇯🇪', '🇯🇴', '🇰🇿', '🇰🇪', '🇰🇮', '🇽🇰', '🇰🇼', '🇰🇬', '🇱🇦', '🇱🇻', '🇱🇧', '🇱🇸', '🇱🇷', '🇱🇾', '🇱🇮', '🇱🇹', '🇱🇺', '🇲🇴', '🇲🇬', '🇲🇼', '🇲🇾', '🇲🇻', '🇲🇱', '🇲🇹', '🇲🇭', '🇲🇶', '🇲🇷', '🇲🇺', '🇾🇹', '🇲🇽', '🇫🇲', '🇲🇩', '🇲🇨', '🇲🇳', '🇲🇪', '🇲🇸', '🇲🇦', '🇲🇿', '🇲🇲', '🇳🇦', '🇳🇷', '🇳🇵', '🇳🇱', '🇳🇨', '🇳🇿', '🇳🇮', '🇳🇪', '🇳🇬', '🇳🇺', '🇳🇫', '🇰🇵', '🇲🇰', '🇲🇵', '🇳🇴', '🇴🇲', '🇵🇰', '🇵🇼', '🇵🇸', '🇵🇦', '🇵🇬', '🇵🇾', '🇵🇪', '🇵🇭', '🇵🇳', '🇵🇱', '🇵🇹', '🇵🇷', '🇶🇦', '🇷🇪', '🇷🇴', '🇷🇺', '🇷🇼', '🇼🇸', '🇸🇲', '🇸🇹', '🇸🇦', '🇸🇳', '🇷🇸', '🇸🇨', '🇸🇱', '🇸🇬', '🇸🇽', '🇸🇰', '🇸🇮', '🇬🇸', '🇸🇧', '🇸🇴', '🇿🇦', '🇰🇷', '🇸🇸', '🇪🇸', '🇱🇰', '🇧🇱', '🇸🇭', '🇰🇳', '🇱🇨', '🇵🇲', '🇻🇨', '🇸🇩', '🇸🇷', '🇸🇪', '🇨🇭', '🇸🇾', '🇹🇼', '🇹🇯', '🇹🇿', '🇹🇭', '🇹🇱', '🇹🇬', '🇹🇰', '🇹🇴', '🇹🇹', '🇹🇳', '🇹🇷', '🇹🇲', '🇹🇨', '🇹🇻', '🇻🇮', '🇺🇬', '🇺🇦', '🇦🇪', '🇬🇧', '🏴󠁧󠁢󠁥󠁮󠁧󠁿', '🏴󠁧󠁢󠁳󠁣󠁴󠁿', '🏴󠁧󠁢󠁷󠁬󠁳󠁿', '🇺🇸', '🇺🇾', '🇺🇿', '🇻🇺', '🇻🇦', '🇻🇪', '🇻🇳', '🇼🇫', '🇪🇭', '🇾🇪', '🇿🇲', '🇿🇼']
     };
   }
 
@@ -3888,12 +5960,20 @@ class ChatApp {
     const grid = this.chatElements.emojiGrid;
     if (!grid) return;
 
-    grid.innerHTML = allEmojis.slice(0, 50).map(emoji =>
+    grid.innerHTML = allEmojis.slice(0, 100).map(emoji =>
       `<button class="emoji-btn" type="button" onclick="app.insertEmoji('${emoji}')">${emoji}</button>`
     ).join('');
   }
 
   insertEmoji(emoji) {
+    // Check if we're inserting for a message reaction
+    if (this.emojiPickerTargetMessage) {
+      this.toggleReaction(this.emojiPickerTargetMessage, emoji);
+      this.emojiPickerTargetMessage = null;
+      this.chatElements.emojiPicker?.classList.remove('active');
+      return;
+    }
+
     const input = this.chatElements.messageInput;
     if (!input) return;
 
@@ -3911,18 +5991,18 @@ class ChatApp {
   // ============================================
   // NOTIFICATIONS
   // ============================================
-  playNotificationSound() {
+  playSound(type = 'notification') {
     if (!this.settings.soundEnabled) return;
 
     try {
-      const sound = this.sounds.notification;
+      const sound = this.sounds[type] || this.sounds.notification;
       if (sound) {
         sound.currentTime = 0;
         sound.volume = 0.5;
         sound.play().catch(() => {});
       }
     } catch (e) {
-      console.error('Error playing notification sound:', e);
+      console.error('Error playing sound:', e);
     }
   }
 
@@ -3935,7 +6015,8 @@ class ChatApp {
       const notification = new Notification(message.displayName || message.username, {
         body: this.truncateText(message.text, 100),
         icon: message.avatar || '/favicon.ico',
-        tag: message.id
+        tag: message.id,
+        badge: '/favicon.ico'
       });
 
       notification.onclick = () => {
@@ -3959,7 +6040,7 @@ class ChatApp {
   updateUI() {
     if (!this.user) return;
 
-    const avatar = this.user.avatar || this.generateDefaultAvatar(this.user.username);
+    const avatar = this.user.avatar || this.avatarService.generateDefault(this.user.username);
 
     if (this.userProfileElements.avatar) {
       this.userProfileElements.avatar.src = avatar;
@@ -3969,6 +6050,9 @@ class ChatApp {
     }
     if (this.userProfileElements.username) {
       this.userProfileElements.username.textContent = `@${this.user.username}`;
+    }
+    if (this.userProfileElements.roleBadge) {
+      this.userProfileElements.roleBadge.innerHTML = this.getRoleBadgeHtml(this.user.role);
     }
 
     if (this.settingsModalElements.avatar) {
@@ -3992,14 +6076,52 @@ class ChatApp {
 
     this.updateRoomsList();
     this.updateUsersList();
+    this.updateAdminButtonVisibility();
   }
 
   openModal(modal) {
     this.modals[modal]?.classList.add('active');
+    // Focus first input
+    setTimeout(() => {
+      this.modals[modal]?.querySelector('input, textarea, select')?.focus();
+    }, 100);
   }
 
   closeAllModals() {
     Object.values(this.modals).forEach(m => m?.classList.remove('active'));
+  }
+
+  showConfirmModal(title, message, onConfirm, confirmText = 'Confirm', type = 'primary', hasHtml = false) {
+    const modal = this.modals.confirm;
+    if (!modal) return;
+
+    const titleEl = this.confirmModalElements.title;
+    const messageEl = this.confirmModalElements.message;
+    const confirmBtn = this.confirmModalElements.confirmBtn;
+
+    if (titleEl) titleEl.textContent = title;
+    if (messageEl) {
+      if (hasHtml) {
+        messageEl.innerHTML = message;
+      } else {
+        messageEl.textContent = message;
+      }
+    }
+    if (confirmBtn) {
+      confirmBtn.textContent = confirmText;
+      confirmBtn.className = `btn btn-${type}`;
+      confirmBtn.onclick = async () => {
+        confirmBtn.disabled = true;
+        try {
+          await onConfirm();
+        } finally {
+          confirmBtn.disabled = false;
+          this.closeAllModals();
+        }
+      };
+    }
+
+    this.openModal('confirm');
   }
 
   openImageModal(url) {
@@ -4015,6 +6137,10 @@ class ChatApp {
     if (openLink) openLink.href = url;
 
     this.openModal('image');
+  }
+
+  showShortcutsModal() {
+    this.openModal('shortcuts');
   }
 
   showToast(message, type = 'info') {
@@ -4036,6 +6162,9 @@ class ChatApp {
     toast.innerHTML = `
       <i class="fas ${icons[type] || icons.info}"></i>
       <span>${this.escapeHtml(message)}</span>
+      <button class="toast-close" onclick="this.parentElement.remove()">
+        <i class="fas fa-times"></i>
+      </button>
     `;
 
     container.appendChild(toast);
@@ -4047,7 +6176,7 @@ class ChatApp {
     setTimeout(() => {
       toast.classList.remove('show');
       setTimeout(() => toast.remove(), 300);
-    }, 3000);
+    }, 4000);
   }
 
   setButtonLoading(button, loading, text) {
@@ -4055,10 +6184,11 @@ class ChatApp {
 
     if (loading) {
       button.disabled = true;
+      button.dataset.originalText = button.innerHTML;
       button.innerHTML = `<i class="fas fa-spinner fa-spin"></i> ${text}`;
     } else {
       button.disabled = false;
-      button.innerHTML = `<span>${text}</span><i class="fas fa-arrow-right"></i>`;
+      button.innerHTML = button.dataset.originalText || `<span>${text}</span>`;
     }
   }
 
@@ -4081,7 +6211,6 @@ class ChatApp {
   // API REQUEST
   // ============================================
   async apiRequest(url, options = {}) {
-    // Check if offline
     if (!navigator.onLine) {
       console.log('[API] Offline - request blocked:', url);
       return { error: 'You are offline', offline: true };
@@ -4153,10 +6282,12 @@ class ChatApp {
       return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     }
     if (diff < 172800000) return 'Yesterday';
+    if (diff < 604800000) return date.toLocaleDateString([], { weekday: 'short' });
     return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
   }
 
   formatDateFull(dateString) {
+    if (!dateString) return 'Unknown';
     const date = new Date(dateString);
     const now = new Date();
 
@@ -4178,27 +6309,12 @@ class ChatApp {
     if (!bytes) return '0 B';
     if (bytes < 1024) return bytes + ' B';
     if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
-    return (bytes / 1048576).toFixed(1) + ' MB';
+    if (bytes < 1073741824) return (bytes / 1048576).toFixed(1) + ' MB';
+    return (bytes / 1073741824).toFixed(1) + ' GB';
   }
 
   generateDefaultAvatar(username) {
-    const colors = [
-      '#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEAA7',
-      '#DDA0DD', '#98D8C8', '#F7DC6F', '#BB8FCE', '#85C1E9',
-      '#F8B500', '#00D4AA', '#FF6F61', '#6B5B95', '#88B04B'
-    ];
-    const color = colors[(username || 'U').charCodeAt(0) % colors.length];
-    const initial = ((username || 'U')[0] || 'U').toUpperCase();
-
-    return `data:image/svg+xml,${encodeURIComponent(`
-      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
-        <rect width="100" height="100" fill="${color}"/>
-        <text x="50" y="50" dy="0.35em" text-anchor="middle" 
-              font-family="Arial, sans-serif" font-size="45" font-weight="bold" fill="white">
-          ${initial}
-        </text>
-      </svg>
-    `)}`;
+    return this.avatarService.generateDefault(username);
   }
 
   debounce(func, wait) {
@@ -4211,11 +6327,311 @@ class ChatApp {
 }
 
 // ============================================
+// THEME CSS VARIABLES (Add to your CSS file)
+// ============================================
+/*
+[data-theme="dark"] { --bg-primary: #1a1a2e; --bg-secondary: #16213e; --text-primary: #eee; --accent: #e94560; }
+[data-theme="light"] { --bg-primary: #f5f5f5; --bg-secondary: #fff; --text-primary: #333; --accent: #6366f1; }
+[data-theme="midnight"] { --bg-primary: #0f0f23; --bg-secondary: #1a1a3e; --text-primary: #c9c9ff; --accent: #7c3aed; }
+[data-theme="nature"] { --bg-primary: #1a2f1a; --bg-secondary: #0d1f0d; --text-primary: #c8e6c9; --accent: #4caf50; }
+[data-theme="sunset"] { --bg-primary: #2d1b2d; --bg-secondary: #1a0f1a; --text-primary: #ffd6e0; --accent: #ff6b6b; }
+[data-theme="ocean"] { --bg-primary: #0a192f; --bg-secondary: #112240; --text-primary: #8892b0; --accent: #64ffda; }
+[data-theme="forest"] { --bg-primary: #1b2d1b; --bg-secondary: #0f1f0f; --text-primary: #a8d5a2; --accent: #8bc34a; }
+[data-theme="cherry"] { --bg-primary: #2d1f2d; --bg-secondary: #1f141f; --text-primary: #f8bbd9; --accent: #e91e63; }
+[data-theme="cyberpunk"] { --bg-primary: #0d0d0d; --bg-secondary: #1a1a1a; --text-primary: #00ff9f; --accent: #ff00ff; }
+[data-theme="lavender"] { --bg-primary: #2d2d3f; --bg-secondary: #1f1f2e; --text-primary: #e0d6ff; --accent: #b388ff; }
+[data-theme="mocha"] { --bg-primary: #1e1e2e; --bg-secondary: #181825; --text-primary: #cdd6f4; --accent: #f5c2e7; }
+[data-theme="arctic"] { --bg-primary: #e8f4f8; --bg-secondary: #fff; --text-primary: #2c3e50; --accent: #00bcd4; }
+[data-theme="volcano"] { --bg-primary: #1a0a0a; --bg-secondary: #2d1515; --text-primary: #ffccbc; --accent: #ff5722; }
+[data-theme="galaxy"] { --bg-primary: #0a0a1a; --bg-secondary: #15152d; --text-primary: #e0e0ff; --accent: #9c27b0; }
+[data-theme="retro"] { --bg-primary: #2b2b2b; --bg-secondary: #1f1f1f; --text-primary: #f0e68c; --accent: #ff6347; }
+
+.message.aligned-right { flex-direction: row-reverse; }
+.message.aligned-right .message-content { align-items: flex-end; }
+.message.aligned-right .message-text { text-align: right; }
+*/
+
+// ============================================
 // INITIALIZE APPLICATION
 // ============================================
 const app = new ChatApp();
-
-// Make app globally accessible for onclick handlers
 window.app = app;
 
-console.log('🚀 ChatHub with Polling & Offline Support initialized');
+console.log('🚀 ChatHub Enhanced initialized with:');
+console.log('   ✅ 15 Themes');
+console.log('   ✅ Multiple Avatar Formats (JPG, PNG, GIF, WebP, SVG)');
+console.log('   ✅ Right-aligned Sender Messages');
+console.log('   ✅ Channel Admin Features');
+console.log('   ✅ Master Control Panel');
+console.log('   ✅ Offline Support & Message Queuing');
+console.log('   ✅ Polling Fallback');
+// ============================================
+// SERVICE WORKER REGISTRATION
+// ============================================
+
+class ServiceWorkerManager {
+  constructor() {
+    this.registration = null;
+    this.updateAvailable = false;
+  }
+
+  async register() {
+    if (!('serviceWorker' in navigator)) {
+      console.log('Service Worker not supported');
+      return false;
+    }
+
+    try {
+      this.registration = await navigator.serviceWorker.register('/service-worker.js', {
+        scope: '/'
+      });
+
+      console.log('✅ Service Worker registered:', this.registration.scope);
+
+      // Check for updates
+      this.registration.addEventListener('updatefound', () => {
+        const newWorker = this.registration.installing;
+        console.log('🔄 Service Worker update found');
+
+        newWorker.addEventListener('statechange', () => {
+          if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+            this.updateAvailable = true;
+            this.showUpdateNotification();
+          }
+        });
+      });
+
+      // Listen for controller change
+      navigator.serviceWorker.addEventListener('controllerchange', () => {
+        console.log('🔄 Service Worker controller changed');
+        window.location.reload();
+      });
+
+      // Listen for messages from service worker
+      navigator.serviceWorker.addEventListener('message', (event) => {
+        this.handleServiceWorkerMessage(event.data);
+      });
+
+      // Check for updates every hour
+      setInterval(() => {
+        this.registration.update();
+      }, 60 * 60 * 1000);
+
+      return true;
+
+    } catch (error) {
+      console.error('❌ Service Worker registration failed:', error);
+      return false;
+    }
+  }
+
+  async unregister() {
+    if (this.registration) {
+      const success = await this.registration.unregister();
+      console.log('Service Worker unregistered:', success);
+      return success;
+    }
+    return false;
+  }
+
+  async update() {
+    if (this.registration) {
+      await this.registration.update();
+      console.log('Service Worker update check triggered');
+    }
+  }
+
+  skipWaiting() {
+    if (this.registration && this.registration.waiting) {
+      this.registration.waiting.postMessage({ type: 'skipWaiting' });
+    }
+  }
+
+  showUpdateNotification() {
+    // Show update notification UI
+    const notification = document.createElement('div');
+    notification.className = 'update-notification';
+    notification.innerHTML = `
+      <div class="update-content">
+        <i class="fas fa-sync-alt"></i>
+        <span>A new version is available!</span>
+        <button class="btn-update" onclick="swManager.skipWaiting()">Update Now</button>
+        <button class="btn-dismiss" onclick="this.closest('.update-notification').remove()">Later</button>
+      </div>
+    `;
+    document.body.appendChild(notification);
+    
+    setTimeout(() => notification.classList.add('show'), 100);
+  }
+
+  handleServiceWorkerMessage(data) {
+    console.log('Message from Service Worker:', data);
+
+    if (data.type === 'sync-complete') {
+      console.log(`Synced ${data.count} messages`);
+      if (window.app) {
+        window.app.showToast(`${data.count} messages synced`, 'success');
+      }
+    }
+  }
+
+  async getCacheSize() {
+    if (!this.registration || !this.registration.active) {
+      return 0;
+    }
+
+    return new Promise((resolve) => {
+      const messageChannel = new MessageChannel();
+      
+      messageChannel.port1.onmessage = (event) => {
+        resolve(event.data.cacheSize);
+      };
+
+      this.registration.active.postMessage(
+        { type: 'getCacheSize' },
+        [messageChannel.port2]
+      );
+    });
+  }
+
+  async clearCache() {
+    if (this.registration && this.registration.active) {
+      this.registration.active.postMessage({ type: 'clearCache' });
+      console.log('Cache clear requested');
+    }
+  }
+}
+
+// Initialize Service Worker Manager
+const swManager = new ServiceWorkerManager();
+
+// Register on load
+window.addEventListener('load', async () => {
+  const registered = await swManager.register();
+  
+  if (registered) {
+    console.log('✅ PWA ready');
+    
+    // Show install prompt
+    showInstallPrompt();
+  }
+});
+
+// ============================================
+// INSTALL PROMPT
+// ============================================
+
+let deferredPrompt;
+
+window.addEventListener('beforeinstallprompt', (e) => {
+  console.log('💾 Install prompt available');
+  e.preventDefault();
+  deferredPrompt = e;
+  
+  // Show install button
+  showInstallButton();
+});
+
+function showInstallButton() {
+  const installBtn = document.getElementById('install-app-btn');
+  if (installBtn) {
+    installBtn.style.display = 'flex';
+    installBtn.addEventListener('click', installApp);
+  }
+}
+
+async function installApp() {
+  if (!deferredPrompt) {
+    console.log('No install prompt available');
+    return;
+  }
+
+  deferredPrompt.prompt();
+  
+  const { outcome } = await deferredPrompt.userChoice;
+  console.log(`Install prompt outcome: ${outcome}`);
+
+  if (outcome === 'accepted') {
+    console.log('✅ App installed');
+    if (window.app) {
+      window.app.showToast('ChatHub installed successfully!', 'success');
+    }
+  }
+
+  deferredPrompt = null;
+  
+  const installBtn = document.getElementById('install-app-btn');
+  if (installBtn) {
+    installBtn.style.display = 'none';
+  }
+}
+
+window.addEventListener('appinstalled', () => {
+  console.log('✅ App was installed');
+  deferredPrompt = null;
+});
+
+function showInstallPrompt() {
+  // Only show if not already installed
+  if (window.matchMedia('(display-mode: standalone)').matches) {
+    console.log('App already installed');
+    return;
+  }
+
+  // Check if iOS
+  const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+  
+  if (isIOS && !window.navigator.standalone) {
+    // Show iOS install instructions
+    showIOSInstallInstructions();
+  }
+}
+
+function showIOSInstallInstructions() {
+  const modal = document.createElement('div');
+  modal.className = 'ios-install-modal';
+  modal.innerHTML = `
+    <div class="ios-install-content">
+      <h3>Install ChatHub</h3>
+      <p>To install this app on your iPhone:</p>
+      <ol>
+        <li>Tap the <strong>Share</strong> button <i class="fas fa-share"></i></li>
+        <li>Scroll down and tap <strong>Add to Home Screen</strong> <i class="fas fa-plus-square"></i></li>
+        <li>Tap <strong>Add</strong> in the top right corner</li>
+      </ol>
+      <button class="btn-primary" onclick="this.closest('.ios-install-modal').remove()">Got it!</button>
+    </div>
+  `;
+  document.body.appendChild(modal);
+  
+  setTimeout(() => modal.classList.add('show'), 100);
+}
+
+// ============================================
+// OFFLINE/ONLINE DETECTION
+// ============================================
+
+window.addEventListener('online', () => {
+  console.log('🌐 Back online');
+  document.body.classList.remove('offline-mode');
+  
+  if (window.app) {
+    window.app.updateConnectionStatus('connecting');
+    window.app.connectWebSocket();
+    window.app.pollingService.syncOfflineMessages();
+  }
+});
+
+window.addEventListener('offline', () => {
+  console.log('📡 Gone offline');
+  document.body.classList.add('offline-mode');
+  
+  if (window.app) {
+    window.app.updateConnectionStatus('offline');
+  }
+});
+
+// Check initial state
+if (!navigator.onLine) {
+  document.body.classList.add('offline-mode');
+}
